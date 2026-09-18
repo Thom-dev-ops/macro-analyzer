@@ -5491,3 +5491,365 @@ body { font-size: 15.5px; }
 .prov-rej-head { color: var(--red); letter-spacing: 0.08em; text-transform: uppercase; font-size: 9.5px; }
 .prov-check { color: var(--text-mute-2); }
 .prov-check-role { color: var(--text-mute); text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.06em; }
+
+/* ── /paper — the paper-trading book ─────────────────────────────────
+   Reuses .block / .kpi-strip / .btn-* wholesale. What is defined here is
+   only what the page genuinely adds: the decision log's action tones, the
+   position row, and the mandate list. */
+
+.paper-view { display: flex; flex-direction: column; gap: 18px; }
+.paper-kpis .kpi-meter i.warn { background: var(--amber); }
+.paper-kpis .kpi-meter i.neg  { background: var(--red); }
+.paper-view .kpi-val.warn { color: var(--amber); }
+
+/* Positions */
+.paper-pos-list { display: flex; flex-direction: column; }
+.paper-pos {
+  display: grid;
+  grid-template-columns:
+    minmax(132px, 0.9fr) minmax(190px, 1.4fr) minmax(150px, 1fr) minmax(96px, auto) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 11px var(--pad-card);
+  border-top: 1px solid var(--line-soft);
+}
+.paper-pos:first-child { border-top: 0; }
+.paper-pos:hover { background: var(--bg-card-2); }
+.pp-ident { display: flex; align-items: center; gap: 8px; }
+.pp-ticker { font-weight: 600; font-size: 0.95rem; }
+.pp-weight { color: var(--text-mute); font-size: 0.8rem; }
+.pp-levels { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.8rem; }
+.pp-levels i { font-style: normal; color: var(--text-mute-2); margin-right: 4px; }
+.pp-rank { display: flex; align-items: center; gap: 4px; font-size: 0.8rem; }
+.pp-rank i { font-style: normal; color: var(--text-mute-2); margin-right: 4px; }
+.pp-flag {
+  margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+  background: var(--accent-weak); color: var(--accent); font-size: 0.68rem;
+}
+.pp-pnl { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; justify-self: end; }
+.pp-r { font-size: 0.78rem; }
+
+/* Equity curve + mandate */
+.paper-curve { padding: 14px var(--pad-card) 18px; }
+.paper-curve-foot { font-size: 0.75rem; margin-top: 6px; }
+.paper-mandate {
+  display: grid; grid-template-columns: minmax(110px, auto) 1fr;
+  gap: 7px 16px; padding: 14px var(--pad-card) 18px; margin: 0;
+  font-size: 0.82rem;
+}
+.paper-mandate dt { color: var(--text-mute-2); }
+.paper-mandate dd { margin: 0; color: var(--text-mute); }
+
+/* Decision log */
+.paper-filters { display: flex; gap: 4px; margin-right: 10px; }
+.paper-filters .btn-mini.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.paper-log { display: flex; flex-direction: column; }
+.paper-dec { border-top: 1px solid var(--line-soft); }
+.paper-dec:first-child { border-top: 0; }
+.pd-row {
+  display: grid;
+  grid-template-columns: 62px 74px 1fr auto auto;
+  align-items: center; gap: 12px; width: 100%;
+  padding: 9px var(--pad-card);
+  background: none; border: 0; text-align: left; cursor: pointer;
+  font: inherit; color: inherit;
+}
+.pd-row:hover { background: var(--bg-card-2); }
+.paper-dec.on { background: var(--bg-inset); }
+.pd-action {
+  font-size: 0.68rem; letter-spacing: 0.04em; text-align: center;
+  padding: 2px 0; border-radius: 4px; border: 1px solid var(--line-2);
+  color: var(--text-mute);
+}
+.pd-action.tone-open   { color: var(--green); border-color: var(--green); }
+.pd-action.tone-trim   { color: var(--amber); border-color: var(--amber); }
+.pd-action.tone-exit   { color: var(--red);   border-color: var(--red); }
+.pd-action.tone-reject { color: var(--text-mute-3); border-style: dashed; }
+.pd-action.tone-hold   { color: var(--text-mute-3); border-color: var(--line); }
+.pd-ticker { font-weight: 600; font-size: 0.85rem; }
+.pd-headline { font-size: 0.83rem; color: var(--text-mute); }
+.paper-dec.tone-reject .pd-headline { color: var(--text-mute-2); }
+.pd-blocker {
+  font-size: 0.68rem; padding: 2px 7px; border-radius: 4px;
+  background: var(--bg-card-3); color: var(--text-mute-2); white-space: nowrap;
+}
+.pd-when { font-size: 0.72rem; white-space: nowrap; }
+
+.pd-detail {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 26px;
+  padding: 4px var(--pad-card) 18px 96px;
+}
+.pdd-h {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-mute-3); margin-bottom: 8px;
+}
+.pdd-comps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.pdd-comps li { display: grid; grid-template-columns: 44px 1fr; gap: 10px; font-size: 0.8rem; }
+.pdd-delta { text-align: right; }
+.pdd-rank { margin-top: 10px; font-size: 0.76rem; color: var(--text-mute-2); }
+.pdd-kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 0; font-size: 0.8rem; }
+.pdd-kv dt { color: var(--text-mute-3); }
+.pdd-kv dd { margin: 0; color: var(--text-mute); }
+.pdd-intent { margin-top: 10px; font-size: 0.74rem; }
+
+.paper-tick-preview { margin: 0 var(--pad-card) 12px; border: 1px solid var(--line); border-radius: 8px; }
+.ptp-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; border-bottom: 1px solid var(--line-soft);
+  font-size: 0.74rem; color: var(--text-mute-2);
+}
+.paper-tick-preview pre {
+  margin: 0; padding: 12px; font-size: 0.72rem; line-height: 1.55;
+  overflow-x: auto; white-space: pre; color: var(--text-mute);
+}
+
+/* Candidate queue */
+.paper-cands { display: flex; flex-direction: column; }
+.paper-cand {
+  display: grid;
+  grid-template-columns: 72px 58px 46px 64px 52px auto 1fr;
+  align-items: center; gap: 10px;
+  padding: 7px var(--pad-card);
+  border-top: 1px solid var(--line-soft);
+  font-size: 0.8rem;
+}
+.paper-cand:first-child { border-top: 0; }
+.paper-cand.below { opacity: 0.5; }
+.pc-ticker { font-weight: 600; }
+.pc-band { font-size: 0.7rem; color: var(--text-mute-2); }
+.pc-held {
+  font-size: 0.66rem; padding: 1px 6px; border-radius: 4px;
+  background: var(--accent-weak); color: var(--accent);
+}
+.pc-why { font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 1100px) {
+  .paper-pos { grid-template-columns: 1fr 1fr; }
+  .pd-detail { grid-template-columns: 1fr; padding-left: var(--pad-card); }
+  .pd-row { grid-template-columns: 56px 64px 1fr; }
+  .pd-when, .pd-blocker { display: none; }
+}
+
+/* /paper — performance attribution */
+/* Borders on the cells, not a 1px grid gap over a coloured container —
+   a partly-filled last row would otherwise show the container colour
+   through the empty tracks as a grey slab. */
+.perf-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+.ps {
+  padding: 13px var(--pad-card) 15px;
+  border-right: 1px solid var(--line-soft);
+  border-top: 1px solid var(--line-soft);
+}
+.ps:last-child { border-right: 0; }
+.ps-lbl {
+  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-mute-3);
+}
+.ps-val { font-size: 1.25rem; margin-top: 4px; font-weight: 500; }
+.ps-val .mono { font-size: 1.25rem; }
+.ps-pair { display: flex; align-items: baseline; gap: 5px; }
+.ps-pair .mono { font-size: 1rem; }
+.ps-sub { font-size: 0.72rem; color: var(--text-mute-2); margin-top: 3px; }
+
+.perf-axis {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  padding: 12px var(--pad-card) 4px;
+}
+.perf-axis .btn-mini.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.perf-axis-note { font-size: 0.72rem; margin-left: 6px; }
+
+.perf-table { display: flex; flex-direction: column; padding-bottom: 6px; }
+.pt-head, .pt-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.6fr) minmax(120px, 1fr) repeat(6, minmax(72px, 0.7fr));
+  gap: 10px; align-items: center;
+  padding: 8px var(--pad-card);
+}
+.pt-head {
+  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-mute-3); border-bottom: 1px solid var(--line-soft);
+}
+.pt-row { border-bottom: 1px solid var(--line-soft); font-size: 0.82rem; }
+.pt-row:last-child { border-bottom: 0; }
+.pt-row:hover { background: var(--bg-card-2); }
+.pt-num { text-align: right; }
+.pt-name { display: flex; flex-direction: column; gap: 1px; font-weight: 500; }
+.pt-tickers { font-style: normal; font-size: 0.68rem; color: var(--text-mute-3); font-family: var(--mono, monospace); }
+.pt-open { font-style: normal; color: var(--text-mute-3); font-size: 0.72rem; }
+.pt-sleeve, .pt-why { font-size: 0.76rem; }
+
+/* The attribution table has one fewer column than the blotter head in
+   some axes; the sleeve/why columns collapse first on narrow screens. */
+@media (max-width: 1250px) {
+  .pt-head, .pt-row { grid-template-columns: minmax(120px, 1.4fr) repeat(5, minmax(64px, 0.7fr)); }
+  .pt-sleeve, .pt-why, .pt-head span:nth-child(2) { display: none; }
+}
+
+.pm-hint {
+  display: block; margin-top: 3px; font-size: 0.72rem;
+  color: var(--text-mute-3); line-height: 1.45;
+}
+
+/* Funnel state + result note on the asset page's action row. */
+.ah-funnel-state {
+  font-size: 0.72rem;
+  color: var(--text-mute-2);
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.ah-funnel-note {
+  font-size: 0.72rem;
+  color: var(--accent);
+  padding: 0 4px;
+}
+
+/* The composed view inside a decision drill-down. */
+.pd-detail.wide { grid-template-columns: 1fr 1fr 1fr; }
+.pdd-view { font-weight: 600; color: var(--text-mute); }
+.pdd-ev.stance-supports .pdd-view { color: var(--green); }
+.pdd-ev.stance-opposes  .pdd-view { color: var(--red); }
+.pdd-ev.stance-absent   { opacity: 0.55; }
+@media (max-width: 1400px) { .pd-detail.wide { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 1100px) { .pd-detail.wide { grid-template-columns: 1fr; } }
+
+/* ── /cohort — the Feather Hands copy-trader book ───────────────────────
+   Reuses the /paper blocks; only the panels with no counterpart there are
+   styled here. The coverage funnel is the one that must read loudly: this
+   book measures a cohort whose flow it can only partly price, and a P&L
+   without that denominator beside it invites the wrong conclusion. */
+
+.cohort-roster { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0 10px; }
+.cohort-author {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg-card-2);
+}
+.ca-name { font-weight: 600; font-size: 0.82rem; }
+.ca-edge { font-size: 0.76rem; }
+.ca-edge.pos { color: var(--green); }
+.ca-edge.neg { color: var(--red); }
+.ca-n { font-size: 0.7rem; }
+.cohort-note { font-size: 0.74rem; line-height: 1.5; max-width: 78ch; }
+
+.cohort-priced { display: flex; align-items: flex-start; gap: 16px; padding: 6px 0 14px; }
+.cp-figure { font-size: 2.1rem; font-weight: 600; line-height: 1; color: var(--accent); }
+.cp-label { font-size: 0.8rem; line-height: 1.5; max-width: 70ch; }
+.cp-label .muted { margin-top: 4px; font-size: 0.74rem; }
+
+.cohort-funnel { display: flex; flex-direction: column; }
+.cf-row {
+  display: grid; align-items: center; gap: 10px;
+  grid-template-columns: 46px 130px 90px 1fr;
+  padding: 5px 0; border-top: 1px solid var(--line-soft); font-size: 0.76rem;
+}
+.cf-row:first-child { border-top: 0; }
+.cf-n { text-align: right; color: var(--text-mute); }
+.cf-reason { font-weight: 600; }
+.cf-bar { height: 5px; background: var(--bg-card-3); border-radius: 3px; overflow: hidden; }
+.cf-bar i { display: block; height: 100%; background: var(--accent-line); }
+.cf-why { font-size: 0.72rem; }
+
+.cohort-unpriced { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-top: 10px; }
+.cu-label { font-size: 0.72rem; }
+.cu-chip {
+  font-size: 0.7rem; padding: 2px 6px; border-radius: 5px;
+  background: var(--bg-inset); border: 1px solid var(--line-soft);
+}
+
+.cohort-cands { display: flex; flex-direction: column; }
+.cohort-cand { border-top: 1px solid var(--line-soft); }
+.cohort-cand:first-child { border-top: 0; }
+.cohort-cand.below { opacity: 0.55; }
+.cc-head {
+  display: grid; align-items: center; gap: 10px; cursor: pointer;
+  grid-template-columns: 62px 54px 34px 62px 1fr 46px 118px 52px 16px;
+  padding: 7px 0; font-size: 0.78rem;
+}
+.cc-head:hover { background: var(--bg-inset); }
+.cc-ticker { font-weight: 600; }
+.cc-rank { text-align: right; color: var(--accent); font-weight: 600; }
+.cc-band { font-size: 0.72rem; color: var(--text-mute); }
+.cc-author { font-size: 0.75rem; color: var(--text-mute); }
+.cc-tf, .cc-rr { font-size: 0.72rem; }
+.cc-rr em { font-style: normal; }
+.cc-w { text-align: right; }
+.cc-toggle { text-align: center; }
+.cc-body { padding: 4px 0 12px 62px; display: flex; flex-direction: column; gap: 6px; }
+.cc-levels { font-size: 0.74rem; color: var(--text-mute); }
+.cc-thesis { font-size: 0.78rem; line-height: 1.5; max-width: 90ch; }
+.cc-meta { font-size: 0.71rem; }
+.cc-components { display: flex; flex-direction: column; gap: 2px; padding-top: 4px; }
+.cc-comp { display: grid; grid-template-columns: 42px 1fr; gap: 8px; font-size: 0.73rem; }
+.cc-delta { text-align: right; color: var(--text-mute); }
+.cc-delta.pos { color: var(--green); }
+.cc-delta.neg { color: var(--red); }
+
+@media (max-width: 1200px) {
+  .cc-head { grid-template-columns: 58px 50px 32px 1fr 46px 100px 16px; }
+  .cc-band, .cc-w { display: none; }
+  .cf-row { grid-template-columns: 40px 118px 1fr; }
+  .cf-why { display: none; }
+}
+
+/* ── /unlocked — the Stock Unlocked call tracker ──────────────────────
+   Reuses .perf-stats / .perf-table / .paper-curve from /paper. What is
+   defined here is only the column layouts the ledgers need and the
+   target-reach bars. */
+
+.unl-sync-msg { font-size: 0.72rem; margin-right: 8px; }
+.unl-foot { padding: 10px var(--pad-card) 12px; }
+.unl-when { font-size: 0.76rem; display: flex; flex-direction: column; gap: 1px; }
+.unl-neq { color: var(--amber); font-weight: 600; }
+.unl-disagree { background: color-mix(in srgb, var(--amber) 6%, transparent); }
+
+.unl-breakdown .pt-head, .unl-breakdown .pt-row {
+  grid-template-columns: minmax(110px, 1.2fr) repeat(6, minmax(56px, 0.7fr));
+}
+.unl-open .pt-head, .unl-open .pt-row {
+  grid-template-columns: minmax(110px, 1.1fr) minmax(130px, 1.1fr) repeat(6, minmax(70px, 0.75fr)) minmax(120px, 1fr);
+}
+.unl-resolved .pt-head, .unl-resolved .pt-row {
+  grid-template-columns: minmax(110px, 1.1fr) minmax(150px, 1.3fr) minmax(90px, 0.9fr) repeat(4, minmax(66px, 0.7fr)) minmax(130px, 1.1fr);
+}
+.unl-options .pt-head, .unl-options .pt-row {
+  grid-template-columns: minmax(130px, 1.1fr) minmax(120px, 0.9fr) minmax(70px, 0.6fr) minmax(220px, 2fr) minmax(70px, 0.6fr) minmax(140px, 1fr);
+}
+.unl-exits { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 0.74rem; }
+.unl-exit i { font-style: normal; }
+
+.unl-reach { padding: 10px var(--pad-card) 14px; display: flex; flex-direction: column; gap: 7px; }
+.unl-reach-row { display: grid; grid-template-columns: 30px 1fr 84px; align-items: center; gap: 10px; font-size: 0.8rem; }
+.unl-reach-lbl { color: var(--text-mute-2); }
+.unl-reach-bar { height: 8px; background: var(--bg-card-2); border-radius: 4px; overflow: hidden; }
+.unl-reach-bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.unl-reach-val { text-align: right; }
+
+@media (max-width: 1250px) {
+  /* /paper's narrow rule hides .pt-why and the second head cell; these
+     ledgers keep both — "Desk says" is the point of the page. */
+  .unlocked-view .pt-why, .unlocked-view .pt-head span:nth-child(2) { display: block; }
+  .unl-open .pt-head span:nth-child(8), .unl-open .pt-row > span:nth-child(8),
+  .unl-resolved .pt-head span:nth-child(6), .unl-resolved .pt-row > span:nth-child(6) { display: none; }
+  .unl-open .pt-head, .unl-open .pt-row {
+    grid-template-columns: minmax(100px, 1.1fr) minmax(120px, 1.1fr) repeat(5, minmax(64px, 0.75fr)) minmax(110px, 1fr);
+  }
+  .unl-resolved .pt-head, .unl-resolved .pt-row {
+    grid-template-columns: minmax(100px, 1.1fr) minmax(140px, 1.3fr) minmax(90px, 0.9fr) repeat(3, minmax(60px, 0.7fr)) minmax(120px, 1.1fr);
+  }
+}
+
+/* Paper-book record badge (concept cards, asset page). */
+.paper-record-badge {
+  font-size: 0.68rem; padding: 1px 7px; border-radius: 4px;
+  border: 1px solid var(--line-2); background: var(--bg-card-2); white-space: nowrap;
+}
+.paper-record-badge.pos { border-color: var(--green); }
+.paper-record-badge.neg { border-color: var(--red); }
+.pd-detail.wider { grid-template-columns: 1fr 1fr 1fr 1fr; }
+.pdd-book { margin: 0 0 8px; font-size: 0.8rem; }
+@media (max-width: 1500px) { .pd-detail.wider { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 1100px) { .pd-detail.wider { grid-template-columns: 1fr; } }

@@ -13,6 +13,9 @@ from macro_positioning.api.funnel import router as funnel_router
 from macro_positioning.api.insiders_routes import router as insiders_router
 from macro_positioning.api.journal_routes import router as journal_router
 from macro_positioning.api.manual_input import router as manual_input_router
+from macro_positioning.api.paper_cohort_routes import router as paper_cohort_router
+from macro_positioning.api.paper_routes import router as paper_router
+from macro_positioning.api.stock_unlocked_routes import router as stock_unlocked_router
 from macro_positioning.api.rules_routes import router as rules_router
 from macro_positioning.api.signal_routes import router as signal_router
 from macro_positioning.api.trade_plan_routes import router as trade_plan_router
@@ -24,6 +27,10 @@ from macro_positioning.db.schema import initialize_database
 from macro_positioning.ingestion.source_registry import load_source_registry
 from macro_positioning.pipelines.run_pipeline import build_pipeline
 from macro_positioning.services.framework import default_credential_requirements, onboarding_template
+
+import logging
+
+_log = logging.getLogger(__name__)
 
 app = FastAPI(title="Macro Positioning Analyzer", version="0.1.0")
 
@@ -104,8 +111,47 @@ app.include_router(rules_router)
 app.include_router(trade_plan_router)
 app.include_router(insiders_router)
 app.include_router(signal_router)
+app.include_router(paper_router)
+app.include_router(paper_cohort_router)
+app.include_router(stock_unlocked_router)
 
-initialize_database(settings.sqlite_path)
+def _init_schema_resiliently(attempts: int = 3, wait_seconds: float = 5.0) -> None:
+    """Apply schema migrations at boot without letting a writer lock kill the API.
+
+    The DB has three other writers, and `alert_watch.py` holds a write
+    transaction through a long price pass every hour. `initialize_database`
+    takes a write lock (it re-runs the documents dedupe), so a boot that
+    lands inside that window used to raise `database is locked` at import
+    time and crash-loop the launchd job — the SPA went down because an
+    unrelated cron was busy.
+
+    WAL keeps readers working throughout, so the right behaviour is to
+    retry a few times and then serve anyway. A migration that could not be
+    applied is logged loudly; the next boot (or the next tick script) will
+    apply it.
+    """
+    import sqlite3
+    import time
+
+    for attempt in range(1, attempts + 1):
+        try:
+            initialize_database(settings.sqlite_path)
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == attempts:
+                _log.error(
+                    "schema init failed (%s). Serving reads anyway — re-run "
+                    "initialize_database() once the writer clears.", exc,
+                )
+                return
+            _log.warning(
+                "schema init blocked by another writer (attempt %d/%d); retrying in %.0fs",
+                attempt, attempts, wait_seconds,
+            )
+            time.sleep(wait_seconds)
+
+
+_init_schema_resiliently()
 repository = SQLiteRepository(settings.sqlite_path)
 
 

@@ -516,3 +516,579 @@ without manual curation. Origins make the source visible ("anchor",
 **Decision:** `format_prompt_blocks([])` returns the sentinel tuple `("—", "—", "—")` rather than raising or returning empty strings.
 **Rationale:** Prevents `KeyError` on `MACRO_ANALYSIS_PROMPT.format(...)` in the heuristic fallback path where `observations` may be an empty list. The LLM sees literal "—" and correctly treats it as "no data available", which is better than a missing key error or blank sections that confuse the model.
 **Alternatives:** Guard clause in `synthesis.py` (rejected — more code for same effect); empty strings (rejected — blank section headers with no content confuse the model).
+
+## 2026-08-25 — Text-native trade calls get a parser, not an LLM
+
+Stock Unlocked Trades relays structured text ("ASAN Entry @ $8.35 / Target
+1: $8.70 / Stop Loss: $7.84"), unlike every other Telegram source, which
+posts charts. Options considered: route it to `llm_extractor`, or write a
+deterministic parser.
+
+Chose the parser (`signals/stock_unlocked_extractor.py`). When the ticker,
+side, entry, targets and stop are stated in words, a regex reads them
+exactly; an LLM re-reading the same words can only introduce error, at a
+per-call cost, on a source that posts several times a day. The router sends
+this source to that extractor exclusively — it never touches the LLM path.
+
+The parse is written back to `documents.extracted_features_json` in the
+vision-compatible shape, so the existing accuracy layer scores this source
+alongside the chart sources instead of growing a parallel scoring path.
+
+Signals are stamped with the call's `published_at`, not ingest time, so
+backfilling a month of history does not read as a same-day burst in the
+momentum and conviction windows.
+
+## 2026-08-27 — The paper book is a semantic layer, not a backtest
+
+A $50k simulated account (`src/macro_positioning/paper/`) now trades the
+stack's own reads automatically: 1–5% per position sized by conviction, a
+hard 30% cash floor, rotation out of weak holdings to fund strong ones.
+
+The design choice worth recording is what it optimises for. A backtest
+would have been cheaper — replay history, print a number. Instead every
+decision the engine makes is persisted with an `Action`, an `Intent` and,
+when it declines to trade, a `Blocker` (`paper/vocabulary.py`). Refusals
+are first-class rows: "BTC scored 92 but the book was 70% deployed and no
+holding was 0.15 weaker" is a record, not a silent skip. Without those
+rows the book's behaviour is unfalsifiable, and an unfalsifiable P&L curve
+is worth nothing.
+
+**Conviction is fused, not chosen.** `trade_scores` is the spine because it
+is the only surface carrying the technical agent's stop — the book will not
+size a position it cannot invalidate. `signals/aggregation.py`'s
+multi-window blend then moves the read up or down (+0.15 agreeing, −0.25
+opposing). Every contribution is stored as a `(name, delta, reason)` triple
+on the decision row, so a 4.1% position is always traceable to the reads
+that produced it.
+
+**The mandate is snapshotted, not referenced.** `config/paper_trading.json`
+is copied onto the portfolio row at creation. Editing it later does not
+retroactively rewrite a running book's rules, so an equity curve stays
+interpretable against the mandate that made it.
+
+**`paper_orders` is the source of truth, `cash` is a cache.** Every tick
+reconciles `cash == starting_equity + Σ cash_delta` and refuses to trust a
+book that fails. Deliberately separate from `trades` / `trade_plans`, which
+remain the hand-traded funnel.
+
+**Two things the first live run taught us**, both now guarded:
+- A LevelSet is drawn at the scoring pass and goes stale against the tape.
+  LMT, RTX and NOC all opened with their stops already on the wrong side of
+  the live mark and stopped out on the next tick for the spread. The engine
+  now refuses any entry whose stop or target the price has already passed
+  (`Blocker.LEVELS_STALE`).
+- A risk exit needs a cooldown. Without one, a name that stops out while
+  still scoring well is bought straight back at a worse price, every tick,
+  forever. Three days, and only after risk exits — rotation and cash-floor
+  trims carry none, since those were forced by capital, not by the thesis
+  failing.
+
+**Boot no longer depends on a write lock.** `api/main.py` called
+`initialize_database()` at import; `alert_watch.py` holds a write
+transaction through its hourly price pass, so a reload inside that window
+crash-looped the launchd job and took the SPA down. Schema init now retries
+and then serves reads anyway — WAL keeps readers working throughout. The
+tick script retries its commit for the same reason.
+
+Automation: `com.macro.paper-tick`, 06:15 + 13:15, a quarter-hour behind
+free-ingest. The tick prints its full decision set, so
+`~/Library/Logs/macro-paper-tick.out.log` is itself the audit trail.
+
+## 2026-08-28 — Paper-book attribution: sleeve, class, regime; and what "booked" means
+
+Added `paper/sleeves.py` + `paper/performance.py` + `/api/paper/performance`,
+so the book's P&L can be read as "the hard-asset sleeve made money" rather
+than one number.
+
+**The taxonomy composes, it does not redeclare.** `config/paper_sleeves.json`
+references the themes already in `config/asset_themes.json` (agriculture,
+precious_metals, crypto, technology_ai, defense, uranium, energy — the
+desk's own vocabulary, already carrying `preferred_regimes`) and the
+members of `config/correlation_buckets.json`, then adds explicit tickers
+only for the gaps. There were fourteen unclassified names in the live
+scored universe, three of which the book was already holding: FCX, COPX
+and XLB had no home because `asset_themes.json` has no industrial-metals
+theme. Coverage is now 71/71 and is reported on the endpoint, so the next
+gap is visible instead of silently diluting a sleeve.
+
+**Reporting map, not a trading rule.** Sleeves never gate a fill;
+correlation buckets still own the caps. The two answer different
+questions — "would this stack the same bet?" versus "where did the money
+come from?" — and merging them would corrupt both.
+
+**Resolution is at read time.** Re-classifying a ticker corrects the whole
+history rather than leaving old positions mis-bucketed, which is the
+opposite of the `mandate_json` decision (frozen at entry). The difference
+is deliberate: a mandate is a commitment and must not move under a P&L
+curve; a taxonomy is a description and should improve retroactively.
+
+**Three separate percentages, never one.** `realizedPct` is booked,
+`unrealizedPct` is an opinion, `totalReturnPct` is the book. `bookedShare`
+answers "how much of the gain is off the table" and returns **null** when
+realized and total disagree in sign — a book that has banked losses while
+sitting on open gains has no meaningful "share of gains banked", and
+rendering that as a negative percentage reads as if money were given back.
+
+**Open positions never count toward the win rate.** They have no verdict
+yet; counting them is how a losing book flatters itself. Returns are
+measured on capital committed (sum of entry notionals from the fill log),
+not on book equity, or every position looks like a rounding error.
+
+**Regime rows overlap and say so.** A sleeve can express two regimes, so
+those rows do not sum to the book. The payload carries `regimeNote` and
+the UI prints it rather than implying a partition. Class and sleeve rows
+*are* a partition, and a test asserts they sum to the book.
+
+**The breakdown that actually tunes the mandate is `byExitReason`.** The
+first days already show it working: six closed trades, all losses — three
+`stop_hit` (the stale-level artifacts, now guarded) and three `make_room`
+rotations out of agriculture and defense to fund crypto, which is the only
+sleeve making money. That is a legible story about the rotation rule, and
+it is invisible in a win rate.
+
+## 2026-08-28 — "Conviction" 0–1 became "rank" 0–100, anchored on the real distribution
+
+The paper book's sizing metric was a 0–1 number called conviction. Asked
+what 0.28 meant, the honest answer was: 28% of the way along a straight
+line between two hand-picked score anchors (55 → 0.00, 90 → 1.00). It had
+the shape of a probability and none of the content, and it was read as
+one — which is the failure, not the misreading.
+
+Measured against 3,379 real scored rows, the old anchors sat badly: score
+55 was the 17th percentile, not "no interest"; score 90 was the 99.7th and
+had been reached nine times ever. The 0.28 entry bar therefore meant "the
+40th percentile" — a below-median name — which is why it had never
+rejected anything.
+
+**Rank is the percentile of the score in the trailing 180 days of
+scheduled passes.** Rank 72 means the name stands above ~72% of what the
+desk scores. The modifiers (signals ±15/−25, cross-window −8, R:R ±10,
+structure +5, momentum ±5) are now percentile POINTS, which is a scale
+they can be read on. Bars moved to 60 in / 40 out.
+
+**It is still not a probability, and the code says so in three places.**
+Nothing here is calibrated against outcomes: `signal_calibration_history`
+is empty, `trades` is empty, and the paper book's only closed trades are
+artifacts of the stale-level bug. Rank claims an ordering and nothing
+more. Making it mean a win rate needs closed trades to calibrate against.
+
+**The entry bar is structurally redundant, and that is worth knowing.**
+All 22 currently-tradeable names rank 66+, because `desk_data` only assigns
+LONG/SHORT to tier_1/tier_2 rows — the side mapping has already done the
+filtering. The bar is a safety net for the modifiers (a name the desk is
+fading drops 25 points and can fall through it), not a primary filter. The
+real gate on what gets bought is the 12-position cap.
+
+**Sizing now spans the tradeable range, not 0–100.** A name that just
+clears the bar gets the 1% minimum and rank 100 gets 5%. Under the old
+scale nothing below 0.28 ever traded, so 1%–2.1% of the band was
+unreachable.
+
+**Ranks clamp at 100; ordering does not.** Nine names saturate the
+displayed scale on a normal day. Ordering decides who takes the last slot,
+so `RankRead.raw` keeps the unclamped value and the candidate sort uses
+it. Display and every bar comparison use the clamped value.
+
+**Migration.** `_migrate_paper_rank_scale()` renames the four columns
+(`paper_positions.conviction_*`, `paper_decisions.conviction*`), renames
+the intents (`new_conviction` → `cleared_bar`, and the two conviction_*
+ones to rank_*), and clears the numeric values written under the old
+meaning — decision headlines still carry the story in prose. Entry ranks
+are NOT reconstructed: the score's percentile is recoverable but the
+modifiers that were applied are not, and backfilling the base-only number
+invented a drift ("rank 80 → 100, +20" on positions that had not moved).
+An unknown entry rank beats a fabricated one.
+
+A stored mandate carrying the old scale cannot be honoured — an entry
+floor of 0.28 means "everything qualifies" on a 0–100 scale — so
+`Mandate.from_stored` replaces it with the current config and the tick
+re-stamps the row once, rather than warning forever. This is the single
+exception to the mandate being frozen at creation.
+
+## 2026-08-31 — Re-entry is gated on reclaim, not on the clock
+
+The paper book refused to re-enter any name for three days after a risk
+exit. Per the desk: a stop-out is not automatically a dead thesis. If
+price broke the level and has since traded back above what the book paid,
+the setup re-presented itself and refusing it leaves a valid trade on the
+table.
+
+Re-entry after a PRICE exit (`stop_hit`, `trail_giveback`,
+`trail_round_trip`) is now gated on **reclaim**: price must be back above
+(long) or below (short) the position's own `avg_price`, plus a 0.2% buffer
+so a tick on the number does not count. What the book still will not do is
+buy back a name trading *below* where it was stopped out — that is paying
+twice for the same broken idea. `Blocker.COOLING_OFF` now names the exact
+price that would reopen the trade, so the refusal is checkable.
+
+`max_stops_per_window` (2) is the chop guard: break-reclaim-break-reclaim
+is how a book dies by a thousand spreads, so past that count the name
+waits out the window whatever price does.
+
+**Thesis exits carry no cooldown at all.** `side_flip` and `rank_decay`
+were changes of view, not level breaks — there is nothing for price to
+reclaim, and the 60/40 entry/exit hysteresis is already a 20-point buffer
+against churning them. Rotation and cash-floor trims were never exits of
+conviction: the book needed the capital, so the name is eligible again the
+moment there is room.
+
+## 2026-08-31 — The funnel was not broken; the writer was held for 40 seconds
+
+Reported as "no way to move a concept forward from the asset page". Two
+real faults under it, one of them project-wide.
+
+**`prices/fetcher.fetch_and_persist()` held the SQLite writer across ~100
+network calls.** A single `with sqlite3.connect(...)` wrapped the whole
+fetch loop, so the write transaction opened on the first ticker's bars and
+stayed open through every remaining yfinance round-trip. The hourly
+`alert_watch.py` job therefore held the writer for 40+ seconds at a
+stretch, and anything else wanting to write in that window died on
+`database is locked` — the paper tick, the API's boot-time schema init
+(which crash-looped the launchd job and took the SPA down), and every
+attempt to mark or promote a concept, which surfaced as a 500 from a
+button that should always work. Fetch now completes before the connection
+is opened. Measured during a live alert-watch run: worst writer wait went
+from 41s to 0.00s.
+
+`db/connect.py` is now the single place that knows the timeouts, and the
+API modules that write use it instead of each picking their own (or none).
+
+**The SPA never persisted plans, and lied when writes failed.** Promoting
+a concept built a plan in `window.MA_DATA` and never called
+`POST /api/funnel/plans` — the funnel appeared to move and hadn't, and the
+plan vanished on reload. `markConcept` had a subtler version: a non-2xx
+response is not a thrown error, so it fell past `if (r.ok)` and reported
+"marked as a concept" on a 500. Both now return `persisted` and the UI
+says "marked locally only — the write failed" when that is what happened.
+Promotion also PATCHes `trade_concepts.trade_plan_id`, which had always
+stayed NULL, breaking the last link of the lineage chain /live renders.
+
+The asset page now carries the funnel action itself — mark → promote →
+open plan, seeded with the technical agent's levels, since that page is
+where the levels already are. Its previous action row (Log this trade /
+chart_vision / Add to watchlist, plus a duplicate set in the footer) was
+entirely inert.
+
+## 2026-09-01 — The trail was a noise detector, not a trailing stop
+
+Reported as: too many trades for a book meant to hold days to weeks. The
+data agreed — **median hold 10.5 hours** across the first 18 closes, max
+3.5 days.
+
+The cause was the trailing exit. It compared open profit to its high-water
+mark as a bare RATIO with no floor on how much profit had to exist first:
+
+    peak > 0 and (peak - current) / peak >= 0.35
+
+A position that ticked up $6 and back to $4 had "given back 33%" and was
+closed. Five of the first seven trail exits fired on peak profits **under
+1%**. NVDA peaked at +0.25% ($5.99) and was closed for **−$98.19** —
+realising a loss the stop had never asked for. `trail_round_trip` was
+worse: it fired whenever anything that had ever been green went red, which
+is a description of trading, not an exit signal.
+
+**The trail now arms at 1R.** Below 1× initial risk it is dormant and the
+stop is the only price exit, which is what a stop is for. Once armed the
+giveback allows half the run back (0.35 → 0.50), which is a swing-horizon
+number rather than a day-trading one.
+
+**R had to mean INITIAL risk.** The target trim moves the stop to
+breakeven, so computing R from the live stop divides by zero and returns
+None — silently disarming the trail for the rest of the trade, exactly
+when a runner most needs it. `paper_positions.initial_risk` is banked at
+entry and is now R's denominator.
+
+**`min_hold_days` (3) stops the book being talked out of itself.** Rank
+decay and rotation cannot close a position inside its first three days;
+three of the eighteen closes were rotations out of six-hour-old positions.
+Stops and hard side flips are exempt — risk and direction always act.
+
+Replaying the 18 closes against these rules: **9 would still exit (every
+one a stop — risk always acts) and 9 would have been held.** SOL is the
+only trail exit that survives, at 1.09R, which is what the rule is for.
+Three of the remaining nine were the stale-level bug and would not have
+opened at all.
+
+One caveat worth keeping: the 12 ticks in that window were mostly manual
+runs during development. The scheduled cadence is twice a day, so the
+exit rules get two chances daily to act, not twelve.
+
+## 2026-09-01 — Targets are judged on four views, not one
+
+The book priced a setup on four numbers the technical agent handed it —
+entry, stop, target, R:R — and threw away everything behind them. The
+platform holds four independent readings of the same trade, and only one
+was reaching the decision.
+
+An audit of the 87 live level sets showed the agent is already better than
+assumed: **81% of stops sit on real chart structure** and 72% of targets
+on tested resistance. The genuine gaps were that **macro regime never
+touched a target** (the word "regime" in the rejection reasons means price
+*scale*), **trusted voices supplied 5% of targets** (consulted, then
+discarded as stale), and **entry is 65% mechanical** — the weakest rail,
+and the one that sets R for every sizing and trail decision.
+
+`paper/valuation.py` composes four views into a 0–100 `support`:
+
+  structure       is the target a level that has been tested and held, or
+                  a projection into open field?
+  trusted_voices  do the KOL targets cluster near the agent's, and do
+                  those people have a resolved record?
+  regime          the brain's own `macro_alignment_score`, paired with the
+                  regime the row was SCORED under — not today's global
+                  read, which would describe a fit never measured.
+  price_action    is the target reachable in ATR terms, is the trend with
+                  the trade?
+
+It drives four things: **size** (support shifts rank ±10 points), **admission**
+(`Blocker.UNSUPPORTED_TARGET` below 35), **the levels themselves** (a target
+the agent projected *past* a tested level is pulled back to it), and **exit
+timing** (`Intent.SUPPORT_COLLAPSED` when the case falls below 20, subject
+to `min_hold_days` — price acts fast, opinions do not).
+
+Pulling targets back is the change with teeth. LMT's target moved 637.79 →
+608.40 because the agent projected through resistance that had held 4× and
+was tested 8 bars ago; R:R fell from ~3.0 to 0.99. That is not the
+composition making the trade worse — it is the composition declining to
+flatter it.
+
+**Paper-side on purpose.** `scoring/levels.py` is shared with the
+hand-traded desk, the alerts and the SPA cards. This layer judges its
+output without moving it, so the composition earns its promotion to a
+levels.py v3 on the paper book's own record rather than on assertion.
+
+Every input is best-effort: a missing structure map or an unreadable KOL
+table degrades that view to `absent` and thins the decision. It never
+stops the tick.
+
+## 2026-09-01 — A second paper book: follow the cohort, don't score it
+
+The paper book measures the desk's blend. It cannot answer whether the
+blend beats just following the people it blends. So there is now a
+**second book on the same engine** whose candidates come from the Feather
+Hands crowd's own calls — Big_Nuts, Feather Hands Trading, MadDog31,
+joejoe55, Market Traders — read straight out of `signals` with the entry,
+stop and target the chart was posted with.
+
+**Nothing forked.** `run_tick(candidates=…)` and `valuations_in=…` were
+already injection points, and every store/route function is keyed by
+`portfolio_id`. The cohort book is a candidate loader
+(`paper/cohort.py`), a mandate (`config/paper_cohort.json`), a tick job
+and a page. Both curves are made by the same exit rules, the same cash
+floor and the same fill model, so the difference between them is the
+difference between the two ideas and not an artefact of two engines.
+
+**The composed view is OFF for this book** (`use_composed_levels: false`,
+`valuations_in={}`). Re-deciding the target with the desk's structure map
+would fold the desk's opinion back into the book whose entire purpose is
+to measure the cohort without it — and the "trusted voices" view would be
+scoring these calls partly against themselves.
+
+**Coverage is a first-class output, not a log line.** 63% of this
+cohort's flow is Solana memecoins nothing in the price stack marks. In
+the live 10-day window: 235 calls → 149 unpriceable, 34 with no side, 21
+whose R:R had already collapsed, 16 untriggered → **3 candidates, 2
+fills**. "Two fills" without that denominator invites exactly the wrong
+conclusion, so `Coverage` is returned by the loader, printed by the tick,
+served at `/api/paper/cohort/coverage` and rendered above the fold. Skips
+are COUNTED, not written as 400 refusal rows — that would bury the
+decision log the desk actually reads.
+
+**Three screens do the work the desk's levels normally do:**
+- *directional only* — `bidirectional`/`no_trade`/`not_a_chart` have no
+  side, and inferring one from the chart is the fake-bias bug again.
+- *a watching call waits for its own entry* — "wants a breakout above
+  105" is a plan; buying it at 98 is buying a trade its author has not
+  taken. Calls the author marks `active`/`entry` skip this.
+- *R:R must still be available at the mark* (`min_live_rr: 1.2`) — a 3R
+  setup bought after it has run to 0.8R is a different trade with the
+  same levels. This is also what stops the book chasing, since the engine
+  fills at the live mark and never at the entry as drawn.
+
+**The rank is not a percentile and does not pretend to be.** There is no
+distribution to rank a Telegram post against, so it is built from the
+call: conviction, chart confluence, R:R, whether the author says they are
+in it, freshness decay, whether the rest of the room agrees or opposes,
+and per-author alpha from `call_outcomes` — gated at 30 scored calls and
+capped at ±8 points, so a measurement tilts the size without deciding it.
+`anchored=False` and a dedicated `CohortMandate` block on the page say so;
+reusing paper.jsx's MandateBlock would have printed "a 0–100 percentile of
+everything the desk scores", which is false here.
+
+**The mandate is looser where the flow demands it and nowhere else.** The
+signal book's 20%/3-per-bucket concentration caps would stop this book
+after three names, because it *is* one bet — crypto. Raised to 55%/6:
+that the book is crypto-correlated is the finding, not something to cap
+away. `min_hold_days` 3 → 1 (this cohort updates hourly; three days would
+make the book ignore its own source), `stale_after_days` 10 (the exit
+that does the most work — almost no call is ever explicitly closed, the
+room just stops mentioning the name), slippage 5bps → 15bps.
+
+## 2026-09-01 — The crypto universe is Coinbase's list, not a hand-typed one
+
+The tracked set was sixteen coins in a literal in `symbol_map.py`. It had
+no ZEC — an $14B coin, #11 by cap, that the Feather Hands crowd calls
+constantly — and it *did* have TRX, which Coinbase does not list here at
+all. Both errors are the same error: a hand-maintained list drifts from
+the exchange it is supposed to describe.
+
+`config/crypto_universe.json` is now generated from three sources by
+`scripts/refresh_crypto_universe.py`, and checked in so a listing change
+arrives as a reviewable commit rather than as a silent behaviour change on
+a morning tick: **405 Coinbase USD/USDC books** (the scope gate), **41
+majors** (CoinGecko's cap ranking ∩ Coinbase, stablecoins and wrapped
+tokens stripped), and **verified yfinance symbols** for both.
+
+**Two sets, because there are two questions.** `coinbase_tradeable()`
+answers "may the desk trade this?" and gates crypto PAIRS.
+`crypto_majors()` answers "may a BARE ticker mean this coin?" — a much
+narrower permission, because equities here are not a fixed list. They are
+scored dynamically from whatever the channels say, so routing all 405
+bases on bare tickers would price real companies as tokens the moment a
+listing collided. SKY is a Coinbase book *and* Skyline Champion on the
+NYSE; AI is a Coinbase book *and* C3.ai. The refresh script now checks
+every cap-ranked candidate against Yahoo for an EQUITY quote and withholds
+bare routing where one exists (PUMP and SKY on this run). The hand-written
+always-major list overrides that check, because those collisions — SOL is
+also Emeren Group — are ones this desk has already decided about.
+
+A non-major Coinbase coin is keyed by its yfinance form: `AERO/USD` →
+`AERO-USD`, the same trick the commodity aliases already used
+(`GOLD` → `GC=F`). The key says what it is, so a coin can never be
+confused with the equity sharing its ticker, and it round-trips.
+
+**Existence is not verification.** The first pass accepted any symbol
+yfinance answered for, and 17 coins came back empty — PEPE, UNI, APT, POL
+among them, all of which Yahoo disambiguates with a CoinMarketCap id.
+Resolving those by search alone would have been worse than the gap:
+`PEPE24478-USD` is Pepe and `PEPE25912-USD` is PepeCoin, a different
+asset. So **Coinbase is both the gate and the oracle** — a symbol is
+accepted only when its close agrees with Coinbase's live price for the
+book we would actually trade, within 20%. That took the verified set from
+57 to 65 of 73, and it earned its keep immediately: TROLL was rejected
+three times over, at 98%, 100% and no-data, because `TROLL-USD` on Yahoo
+is somebody else's TROLL.
+
+The eight that nothing prices (AI, BILL, BIO, CAP, MASK, POL, TROLL,
+WLFI) are recorded in `no_data` with the date and the reason, and they
+still RESOLVE. Returning None for them would report "not a real asset",
+which is a different and much more misleading statement than "tradeable,
+but we have no bars".
+
+**The ingest was throwing raw pairs at yfinance.** Both price jobs fetched
+`asset_ticker` straight out of `signals` — `BTC/USDT`, `KINS/SOL`,
+`牛来/USDT` — none of which yfinance answers in that form, which is why
+the crypto half of the tape never had bars while `BTC`, `ETH` and `SOL`
+sat hardcoded in a top-up set. Both now resolve before fetching and union
+in every major. Backfill: **90 of 111 crypto keys, 17,290 bars.**
+
+**A slash is not always a pair.** Widening the coin set exposed two ways
+the pair parser was too eager, both of which now resolve to nothing:
+
+- *Ratio charts.* "AI/NVDA" and "AAPLCAT/AAPL" have a pair's shape and no
+  book behind them. Reading the left side as a coin put C3.ai into the
+  live-signals feed as a token.
+- *Crypto-quoted pairs.* "ETH/BTC" and "BASECAT/WETH" are real books, but
+  their levels are denominated in the quote coin. An ETH/BTC entry of
+  0.031 marked against a $3,000 ETH-USD price opens a position whose stop
+  is five orders of magnitude from the mark — infinite risk, and the R:R
+  screen waves it through because the arithmetic is internally consistent.
+  Everything the desk marks is in USD, so only a USD-equivalent quote
+  produces a key.
+
+Effect on the cohort book, same 10-day window: **3 candidates → 7, and the
+priceable share of directional calls 26% → 32%.** ENA, HYPE and ETH all
+reached the book, which now holds five positions instead of two. The
+remaining 150 unpriceable calls are genuine DEX flow and ratio charts
+(PONS/WETH, ANSEM/SOL, AI/NVDA) — the honest number.
+
+Also fixed in passing: `BTC.D` and other dominance labels matched the
+dot-class equity pattern (the same shape as `BRK.B`) and were being
+fetched as stocks, despite a comment in that very function claiming they
+were rejected.
+
+## 2026-09-18 — The paper book learns from itself; holds come from the signals
+
+Three weeks in: +1.5% total but −$265 realized, 25% win rate, profit
+factor 0.35. Every dollar of gain was still open. Two bugs and three
+design changes, in the order they were found.
+
+**R was being computed from the moved stop.** After a target trim the
+stop sits at breakeven, so `|entry − stop|` is ~0 and `performance.py`
+reported R in the billions (NEAR, INJ, PLTR, GDXJ). It now uses the
+`initial_risk` banked at fill — the same fix the engine got on Sep 1 —
+and returns None rather than a number nobody should believe when the
+banked risk is degenerate.
+
+**Stops had no floor and no cap.** AVAX opened with a 0.3% stop and
+realised −5.8R on a twelve-hour gap. Across eleven stop-outs the median
+fill was 0.05R beyond the stop but the mean was 0.61R, driven entirely by
+stops too tight to survive a tick. `min_stop_pct` 1.5% (`STOP_TOO_TIGHT`)
+and — the user's one explicit hard limit — `max_stop_pct` 5% on spot
+(`STOP_TOO_WIDE`), both measured from the fill, not the call's entry.
+
+**Hold length is derived per trade, not mandated.** The aim is multi-week
+because that is where the profit factor lives, but "multi-week" is not
+one number. `paper/horizon.py` sets `expected_hold_days` at fill from the
+signals' `dominant_horizon` (swing 10d / position 30d / strategic 60d),
+the setup (breakouts and structure ×1.25, mechanical rails ×0.8) and —
+once a sleeve has n ≥ 30 — its own days-to-peak record. From that:
+`min_hold_days` = 40% (opinions wait that long) and `confirm_ticks` =
+days/3 (opinions must persist that many consecutive ticks), both clamped
+(3–21d, 2–8 ticks). Thesis exits — rank decay, support collapse, side
+flip — now log a HOLD row "watching, k/n" on every unconfirmed tick.
+Stops, target hits and the trail are untouched by any of this: reaching
+the target closes the trade on day 2 or day 40 alike.
+
+**Profit-taking is a sliding scale on trade quality.** Decided once at
+fill and stored as `exit_path`. Rank ≥ 85 AND composed support ≥ 60 →
+the TARGET path: nothing comes off below the composed target, which
+closes the trade in full; a NEAR MISS (≥ 90% of the way, then 0.5R back
+off the high without crossing) closes it too — the target was the idea,
+not the tick. Everything else → the LADDER: 25% at 1R (stop to
+breakeven), 25% at 2R (lock 1R), 25% at 3R (lock 2R), the last quarter
+trails. Both paths: the trail arms at 1R and its allowed giveback
+tightens with peak R (50% → 35% → 25%). Found by a fixture and fixed: a
+position the ladder had reduced was being topped back up by the entry
+pass, which re-armed the stop from a locked 108 to a fresh 192 and
+stopped the whole thing out on the next dip. `PROFIT_TAKEN` now refuses
+adds to a reduced position, and an add can only ever tighten a stop.
+
+**`paper/learning.py` closes the loop.** Every tick, from the trailing
+90 days of the book's own record, per sleeve: avg R / win% / avg win /
+avg loss → a `book_record` rank component (clip(avgR, ±2) × 8 × w, cap
+±10); mean fill-beyond-stop → `risk_mult`, which the size is divided by;
+median days-to-peak on winners → the horizon prior, engaging at n ≥ 30.
+**Everything is weighted `w = n/(n+30)`.** Seven trades is a nudge (w =
+0.19), thirty is half-trusted. n = 0 changes nothing by construction.
+Adjustments are re-derived each tick — no hidden state, so a bad month
+un-learns itself as it rolls out. Per-rung ladder stats and input
+attribution (which of rank / support / signal / regime moved first
+ahead of a turn, from `paper_position_snapshots`) are computed and
+reported but do NOT feed back in v1: they need a record of their own.
+
+Verified three ways before it touched a tick: synthetic-record unit
+tests for the arithmetic, the sign, the cap and the n = 0 case;
+`scripts/paper_learning_report.py` printing each sleeve's adjustment
+next to the raw stats with the formula re-evaluated inline (all ✓); and
+a live tick with the loop on and off, diffed — nine rows moved, the
+largest by 0.55 points, every one carrying the component that explains
+it, fill set identical.
+
+**The record surfaces in three places; the third is gated.** The paper
+rank (L1). A read-only badge on concept cards and the asset page —
+"📓 Crypto 50% · −0.6R · n=10" with the full record on hover — so a human
+promoting a concept sees the machine's record on that class. Feeding
+the shared `trade_scores` is deferred behind an evidence gate: n ≥ 30
+closed trades under the current rules AND the adjusted rank predicting
+realized R better than the unadjusted one out-of-sample. Not a date.
+
+**The hard-asset hypothesis** — that Defense 0/7, Copper 0/5, Precious 0/2
+are multi-week trades the book cut early — is now testable: every open
+position snapshots every input every tick, and the loop reports
+intended vs realized horizon per sleeve. The data will say.
+
+**`paper_position_snapshots`** is the loop's raw material and the answer
+to "which input moved first": one row per open position per tick with
+rank, score, the four views' deltas, the signal blend, regime, unrealized
+R, days held, exit path, and any thesis exit being watched.

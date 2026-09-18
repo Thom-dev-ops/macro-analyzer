@@ -360,7 +360,113 @@ function AssetSignalCalls({ calls, signal }) {
 // ───────────────────────────────────────────────────────────────
 // AssetPage — full page for a single signal/asset.
 // ───────────────────────────────────────────────────────────────
-function AssetPage({ signal, onBack, returnTo }) {
+
+// ── Funnel action for the asset page ───────────────────────────────────
+// One button that knows where this asset already is:
+//   not marked  → "Mark as concept"   (writes to trade_concepts)
+//   active      → "Promote to plan →" (writes to trade_plans, goes to /identify)
+//   promoted    → "Open plan →"       (navigates, nothing to write)
+// Both writes go through the same helpers /positioning and /concepts use,
+// so a mark made here is the same row as a mark made there.
+function FunnelAction({ signal, busy, setBusy, onChanged, onPromote, onNav }) {
+  const asset = signal.asset;
+  const concepts = (window.MA_DATA.concepts || []);
+  const concept = concepts.find(c => c.asset === asset && c.status === "active");
+  const promoted = concepts.find(c => c.asset === asset && c.status === "promoted");
+  const [note, setNote] = React.useState(null);
+
+  const mark = () => {
+    setBusy(true);
+    markConcept({
+      asset,
+      side: signal.side,
+      score: signal.score,
+      tier: signal.tier,
+      thesis: (signal.whyNow || []).join(" · "),
+      source: "asset_page",
+      reason: null,
+    })
+      .then(({ deduped, persisted }) => {
+        // Never claim a write that did not land. An unsaved mark still
+        // moves the funnel on screen, but the page has to say so.
+        if (!persisted) setNote("marked locally only — the write failed");
+        else setNote(deduped ? "already on the concept list" : "marked as a concept");
+        onChanged();
+      })
+      .catch(() => setNote("could not mark — check the API"))
+      .finally(() => setBusy(false));
+  };
+
+  const promote = () => {
+    if (!concept) return;
+    setBusy(true);
+    // Seed the draft plan with the technical agent's levels — the whole
+    // reason to promote from this page rather than from /concepts is that
+    // the levels are right here.
+    promoteConceptToPlan(concept, {
+      seed: {
+        side: signal.side,
+        levelSide: (signal.levels && signal.levels.side) || null,
+        entry: signal.hasLevels ? signal.entry : null,
+        stop: signal.hasLevels ? signal.stop : null,
+        targets: signal.hasLevels && signal.target
+          ? [{ price: signal.target, weight: 1 }] : [],
+        thesis: (signal.whyNow || []).join(" · "),
+      },
+    })
+      .then(({ plan, persisted }) => {
+        onChanged();
+        if (!persisted) setNote("plan created locally only — API unreachable");
+        if (onPromote) onPromote(plan.id);
+      })
+      .catch(() => setNote("could not promote — check the API"))
+      .finally(() => setBusy(false));
+  };
+
+  let button;
+  if (promoted && !concept) {
+    button = (
+      <button
+        className="btn-primary"
+        onClick={() => (onPromote ? onPromote(promoted.tradePlanId) : onNav && onNav("identify"))}
+      >
+        Open plan →
+      </button>
+    );
+  } else if (concept) {
+    button = (
+      <button className="btn-primary" onClick={promote} disabled={busy}>
+        {busy ? "promoting…" : "Promote to plan →"}
+      </button>
+    );
+  } else {
+    button = (
+      <button className="btn-primary" onClick={mark} disabled={busy}>
+        {busy ? "marking…" : "Mark as concept +"}
+      </button>
+    );
+  }
+
+  return (
+    <>
+      {button}
+      {concept && (
+        <span className="ah-funnel-state mono" title="This asset is on the concept list">
+          ● concept since {String(concept.markedAt || "").slice(0, 10)}
+        </span>
+      )}
+      {note && <span className="ah-funnel-note mono">{note}</span>}
+    </>
+  );
+}
+
+function AssetPage({ signal, onBack, returnTo, onPromote, onNav }) {
+  // Where this asset already sits in the funnel, so the page offers the
+  // ONE action that actually moves it on rather than a row of buttons
+  // that do nothing. Recomputed on every render because marking or
+  // promoting mutates MA_DATA in place.
+  const [funnelBusy, setFunnelBusy] = React.useState(false);
+  const [, forceFunnel] = React.useState(0);
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onBack(); };
     window.addEventListener("keydown", onKey);
@@ -411,6 +517,7 @@ function AssetPage({ signal, onBack, returnTo }) {
               <SideLabel side={signal.side} />
               <span className="ah-setup">{signal.setup}</span>
               <span className="ah-update mono muted">updated {signal.lastUpdate}</span>
+              <PaperRecordBadge ticker={signal.asset} />
             </div>
           </div>
 
@@ -483,13 +590,22 @@ function AssetPage({ signal, onBack, returnTo }) {
           );
         })()}
 
-        {/* Actions row — moved to the top */}
+        {/* Actions row — the funnel action is the primary one. This page
+            is where the case for a trade is actually read, so it has to be
+            a place the trade can be moved on from; until now every button
+            here was inert and the only way forward was to leave, find the
+            name on /concepts, and mark it there. */}
         <div className="ah-actions">
-          <button className="btn-primary">Log this trade ↵</button>
-          <button className="btn-secondary">Open chart_vision ⤴</button>
+          <FunnelAction
+            signal={signal}
+            busy={funnelBusy}
+            setBusy={setFunnelBusy}
+            onChanged={() => forceFunnel(n => n + 1)}
+            onPromote={onPromote}
+            onNav={onNav}
+          />
           <button className="btn-secondary">Raw feature vector</button>
           <span className="ah-actions-spacer"></span>
-          <button className="btn-ghost mono">Add to watchlist +</button>
           <button className="btn-ghost mono">Share trail ↗</button>
         </div>
 
@@ -962,13 +1078,9 @@ function ReasoningTrail({ signal, hideHeader = false, hideFooter = false }) {
         </table>
       </div>
 
-      {!hideFooter && (
-        <div className="rt-footer">
-          <button className="btn-primary">Log this trade ↵</button>
-          <button className="btn-secondary">Open chart_vision ⤴</button>
-          <button className="btn-secondary">Raw feature vector</button>
-        </div>
-      )}
+      {/* No footer action row: the funnel action lives once, at the top of
+          the page, next to the score it is a decision about. A second copy
+          down here was three more buttons that did nothing. */}
     </div>
   );
 }

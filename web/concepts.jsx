@@ -144,29 +144,18 @@ function Concepts({ onPromote }) {
     }
   };
 
+  // Promotion goes through the shared write-through helper so the draft
+  // plan reaches `trade_plans` instead of living in MA_DATA until the next
+  // reload. Navigation waits for the POST — landing on /identify with an
+  // id the server has never heard of is worse than a moment's delay.
   const promoteConcept = (c) => {
-    const planId = `plan-${Date.now().toString(36)}`;
-    D.plans = (D.plans || []).concat([{
-      id: planId,
-      conceptId: c.id,
-      asset: c.asset,
-      side: c.sideAtMark || "LONG",
-      entry: null, stop: null,
-      targets: [],
-      sizeUsd: null, sizeR: 1.0,
-      timeHorizon: "swing",
-      thesis: c.thesis || "",
-      invalidation: "",
-      gateStatus: "unchecked",
-      status: "draft",
-      tradeId: null,
-      createdAt: new Date().toISOString().slice(0, 16).replace("T", " "),
-      activatedAt: null,
-    }]);
-    c.status = "promoted";
-    c.promotedAt = new Date().toISOString().slice(0, 16).replace("T", " ");
-    c.tradePlanId = planId;
-    if (onPromote) onPromote(planId);
+    promoteConceptToPlan(c).then(({ plan, persisted }) => {
+      if (!persisted) {
+        console.warn("plan not persisted — offline or preview", plan.id);
+      }
+      rerender();
+      if (onPromote) onPromote(plan.id);
+    });
   };
 
   return (
@@ -206,6 +195,7 @@ function Concepts({ onPromote }) {
                 <div className="concept-asset">
                   <div className="mono asset-cell">{s.asset}</div>
                   <SideLabel side={s.side} />
+                  <PaperRecordBadge ticker={s.asset} compact />
                   {s.origin === "voice" && (
                     <span className="concept-source-chip mono small voice-chip"
                           title="a trusted voice called this; the watchlist doesn't score it">

@@ -124,7 +124,9 @@ function Sparkline({ data, width = 120, height = 28, color = "var(--accent)", ar
 // ─── P&L cell — number + percent, color-coded ────────────────────
 function PnL({ usd, pct, size = "md" }) {
   const cls = usd > 0 ? "pos" : usd < 0 ? "neg" : "flat";
-  const sign = usd >= 0 ? "+" : "";
+  // Sign the number, don't lean on colour alone: a loss rendered as "$1"
+  // reads as a gain to anyone not distinguishing red from green.
+  const sign = usd >= 0 ? "+" : "\u2212";
   const fmt = (n) => Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
   const sizes = {
     sm: { num: 12, sub: 10 },
@@ -676,3 +678,37 @@ Object.assign(window, {
   SourceDetailPanel, PriceChart,
   Likert, EnumPicker, MultiPicker,
 });
+
+
+// ─── Paper-book record badge ─────────────────────────────────────
+// What the paper book has actually made on this ticker's sleeve —
+// win rate, average win, average loss, sample size — read-only, from
+// /api/paper/learning/sleeve/{ticker}. Sits on concept cards and the
+// asset page so a human promoting a concept sees the machine's record
+// on that class. It does NOT move the desk's score: that promotion is
+// gated on the loop earning it (see DECISIONS 2026-09-18).
+const _paperRecordCache = {};
+function PaperRecordBadge({ ticker, compact = false }) {
+  const [rec, setRec] = React.useState(_paperRecordCache[ticker] || null);
+  React.useEffect(() => {
+    if (!ticker || _paperRecordCache[ticker]) return;
+    let live = true;
+    fetch(`/api/paper/learning/sleeve/${encodeURIComponent(ticker)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (live && j) { _paperRecordCache[ticker] = j; setRec(j); } })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [ticker]);
+  if (!rec || !rec.record || !rec.record.n) return null;
+  const r = rec.record;
+  const tone = (r.avgR ?? 0) > 0 ? "pos" : (r.avgR ?? 0) < 0 ? "neg" : "muted";
+  const title = `Paper book on ${rec.sleeveLabel}: ${r.n} closed · ${r.winRate}% win · ` +
+    `avg win ${r.avgWinPct != null ? r.avgWinPct + "%" : "—"} · avg loss ${r.avgLossPct != null ? r.avgLossPct + "%" : "—"} · ` +
+    `${(r.avgR ?? 0).toFixed(2)}R avg. Shrunk to w=${r.w} (n/(n+30)); moves paper rank by ${r.rankDelta > 0 ? "+" : ""}${r.rankDelta}. Read-only here.`;
+  return (
+    <span className={`paper-record-badge mono ${tone}`} title={title}>
+      📓 {rec.sleeveLabel.split(" ")[0]} {r.winRate}% · {(r.avgR ?? 0) >= 0 ? "+" : ""}{(r.avgR ?? 0).toFixed(1)}R
+      {!compact && <span className="muted"> · n={r.n}</span>}
+    </span>
+  );
+}

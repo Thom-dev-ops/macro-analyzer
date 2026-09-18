@@ -1,0 +1,117 @@
+{
+  "$schema_version": "1.0",
+  "description": "Mandate for the paper-trading book. This is the *paper* desk's rulebook and is deliberately separate from config/risk_caps.json, which governs the real-money Trading Rule Framework. The paper book runs a looser, faster mandate on purpose: it exists to measure what the signal stack would have done with a real balance, not to mirror the hand-traded account.",
+
+  "$units": {
+    "*_pct": "percentage as decimal — 0.05 means 5%",
+    "*_bps": "basis points — 5 means 0.05%",
+    "*_days": "calendar days",
+    "rank": "0-100 percentile. A rank of 72 means the name stands above roughly 72% of everything the desk currently scores. NOT a probability and NOT a confidence — nothing here is calibrated against outcomes yet."
+  },
+
+  "scale": "rank_0_100",
+  "$scale_note": "Superseded the old `conviction` 0-1 scale on 2026-08-28. That number was an interpolation between two hand-picked score anchors (55 and 90), so 0.28 looked like '28% confident' when it actually meant 'the 40th percentile' — a below-median name. Rank is anchored on the live score distribution instead, so the number says what it means. A mandate stored under the old scale cannot be read on this one and is replaced at load time rather than silently misinterpreted.",
+
+  "book": {
+    "starting_equity_usd": 50000.0,
+    "base_currency": "USD"
+  },
+
+  "sizing": {
+    "min_position_pct": 0.01,
+    "max_position_pct": 0.05,
+    "$comment": "Every entry lands between 1% and 5% of *current* equity, interpolated across the TRADEABLE rank range — a name that just clears the entry bar gets the 1% minimum, a rank-100 name gets the full 5%. Interpolating from rank 0 instead would waste the bottom half of the band on sizes that never get used, since nothing under the bar trades.",
+    "min_ticket_usd": 250.0,
+    "min_stop_pct": 0.015,
+    "max_stop_pct": 0.05,
+    "$cap_comment": "HARD cap on stop distance for pure asset (spot) plays — the one explicit hard limit on stops. A setup that needs more than 5% of room to be invalidated is not a setup the book sizes; trim the idea or pass. Options positions would carry their own cap; the book trades spot only today.",
+    "$stop_comment": "Floor on stop distance as a fraction of price. The book only looks twice a day, so a stop inside the ordinary overnight range is not a stop — it is a coin flip that pays out in multiples of the planned risk. AVAX on Sep 15 had a 0.3% stop and realised −5.8R on a gap. Measured across 11 stop-outs the median fill was 0.05R beyond the stop, but the mean was 0.61R, driven entirely by stops that were too tight to survive a tick.",
+    "add_threshold_pct": 0.0075,
+    "$add_comment": "Don't bother topping a position up unless the gap between held weight and target weight is at least this wide — stops the engine churning $40 adds."
+  },
+
+  "cash": {
+    "min_cash_pct": 0.30,
+    "$comment": "Hard floor. Deployed capital may never exceed 70% of equity. When marks push the book over the line the engine trims the weakest holding back under it rather than waiting for an exit signal.",
+    "rebalance_tolerance_pct": 0.005
+  },
+
+  "rank": {
+    "entry_floor": 60,
+    "exit_floor": 40,
+    "$comment": "Open only names in the top 40% of the scored universe; close one that falls into the bottom 60%. Asymmetric on purpose — a single bar would churn any name sitting on it. The old 0.28/0.18 pair translated to roughly the 40th/25th percentile, which is why the entry bar rejected nothing: it sat below where the tradeable population lives.",
+    "rotation_edge": 15,
+    "$rotation_comment": "A new candidate must out-rank the holding it would displace by this many percentile points before the engine trims to make room. Prevents coin-flip rotations that only pay the spread."
+  },
+
+  "concentration": {
+    "max_positions": 12,
+    "max_bucket_pct": 0.20,
+    "max_positions_per_bucket": 3,
+    "$comment": "Buckets come from config/correlation_buckets.json — the same correlated-asset map the real-money gate uses. Three crypto L1s at 5% each is one 15% bet, and the cap says so. The catch-all `uncorrelated` bucket is exempt from both caps: its members are by definition not the same bet, so capping it would just cap the book."
+  },
+
+  "exits": {
+    "trim_at_target_pct": 0.5,
+    "$trim_comment": "LEGACY — superseded by `paths` below on 2026-09-18. Kept so an old mandate still parses.",
+    "paths": {
+      "target":    { "min_rank": 85, "min_support": 60 },
+      "near_miss": { "reach_pct": 0.90, "giveback_r": 0.5 },
+      "ladder":    { "rungs": [ { "at_r": 1.0, "take": 0.25, "stop_to": "breakeven" },
+                                { "at_r": 2.0, "take": 0.25, "stop_to": "lock_1r" },
+                                { "at_r": 3.0, "take": 0.25, "stop_to": "lock_2r" } ] },
+      "trail":     { "giveback_by_r": [ { "at_r": 1.0, "giveback": 0.50 },
+                                        { "at_r": 2.0, "giveback": 0.35 },
+                                        { "at_r": 3.0, "giveback": 0.25 } ] },
+      "$comment": "Profit-taking is a sliding scale on trade quality, decided ONCE at fill and stored on the position. TARGET path (rank >= min_rank AND composed support >= min_support): nothing comes off below the composed target — that target was built from four views precisely so the book would have a level worth waiting for. Reaching it closes the trade in full. NEAR MISS: once price has covered reach_pct of the way, a giveback of giveback_r from the high without crossing closes it too — the target was the idea, not the tick. LADDER path (everything else): thirds in R, each rung takes its slice and ratchets the stop (breakeven, then lock 1R, then lock 2R); the agent's structural target is a rung too if it sits between; the last quarter trails. BOTH paths: the trail arms at trail_arms_at_r and its allowed giveback TIGHTENS as peak R grows — a 3R runner is not allowed to hand back half of it. A position the ladder has reduced is never topped back up (Blocker.PROFIT_TAKEN), and an add can only ever tighten a stop. Per-sleeve overrides of any of this are the learning loop's to earn, not the mandate's to set."
+    },
+    "trail_atr_mult": 0.0,
+    "trail_giveback_pct": 0.50,
+    "trail_arms_at_r": 1.0,
+    "$trail_comment": "The trail is DORMANT until the trade is up 1x its initial risk. Only then does the giveback rule apply, and it allows half the open profit back before closing the runner. Without the arming threshold the giveback is a bare ratio: a position that ticked up $6 and back to $4 had 'given back 33%' and was closed. Five of the first seven trail exits fired on peak profits under 1% — NVDA peaked at +0.25% and was closed for -$98, realising a loss the stop never asked for. Below 1R the stop is the only price exit, which is what a stop is for.",
+    "min_hold_days": 10,
+    "thesis_exit_confirm_ticks": 4,
+    "$fallback_comment": "min_hold_days and thesis_exit_confirm_ticks are FALLBACKS for positions that predate horizon derivation. Every new position gets its own values from the `horizon` block below.",
+    "$hold_comment": "The book is a multi-week swing book. Two exit families: PRICE exits (the initial stop, and the trailing profit stop once armed at 1R) act on the tick they trigger, because risk is not an opinion. THESIS exits (rank decay, composed-support collapse, side flip) are opinions about a read, and a twice-daily read wobbles: they must be signalled on `thesis_exit_confirm_ticks` CONSECUTIVE ticks (4 = two full days) before they close anything, and rank decay / support collapse / rotation cannot act at all inside `min_hold_days`. Side flip is exempt from the minimum hold but not from confirmation. Every tick a thesis exit is being watched is logged as a HOLD row saying so, with the streak count.",
+    "$min_hold_comment": "A swing position cannot be talked out of itself in its first three days by a read that moved, and cannot be rotated out to fund another name. Only price (the stop) and a hard directional flip act faster. The first eighteen closes had a MEDIAN HOLD OF 10.5 HOURS on a book meant to hold for days to weeks; three of them were rotations out of six-hour-old positions.",
+    "stale_after_days": 21,
+    "$stale_comment": "If no scoring pass has refreshed the thesis in three weeks, the position is closed as stale rather than left to drift on a dead read.",
+    "reentry_cooldown_days": 3,
+    "reentry_reclaim_buffer_pct": 0.002,
+    "max_stops_per_window": 2,
+    "$reentry_comment": "Re-entry after a PRICE exit (stop, trailing giveback) is gated on reclaim, not on the clock. A stop-out is not automatically a dead thesis: if price broke the level and has since traded back above what the book paid — plus the reclaim buffer, so a tick on the number does not count — the setup re-presented itself and the trade is taken again. What the book will not do is buy back a name still trading BELOW where it was stopped out; that is paying twice for the same broken idea. `max_stops_per_window` is the chop guard: break-reclaim-break-reclaim is how a book dies by a thousand spreads, so past that many stop-outs inside the window the name waits it out whatever price does.",
+    "$reentry_scope_comment": "Thesis exits — side_flip, rank_decay — carry NO cooldown. There is no level for price to reclaim, and the 60/40 entry/exit hysteresis is already a 20-point buffer against churning them. Rotation and cash-floor trims are not exits of conviction at all: those were forced by capital, so the name is eligible the moment there is room again."
+  },
+
+  "horizon": {
+    "fallback_days": 20,
+    "min_hold_fraction": 0.4,
+    "min_hold_bounds": [3, 21],
+    "confirm_ticks_bounds": [2, 8],
+    "confirm_days_divisor": 3,
+    "$comment": "The hold horizon is NOT a mandate constant. It is derived per position at fill (paper/horizon.py) from the trade's own inputs: the signals' dominant horizon (swing 10d / position 30d / strategic 60d), the setup (breakouts and structure trades ×1.25, mechanical rails ×0.8), and — once a sleeve has 30 closed trades — that sleeve's own days-to-peak record, shrunk by n/(n+30). From expected days: min_hold = 40% of it (opinions wait that long), confirm_ticks = days/3 (opinions must persist that many consecutive ticks). Both clamped to the bounds here so neither a loud signal nor a thin sleeve can turn the book into a day-trader or freeze it. None of this delays a stop, a target hit or the trail — the aim is multi-week because that is where the profit factor is, but reaching the target closes the trade whenever it happens."
+  },
+
+  "learning": {
+    "shrink_n": 30,
+    "min_n": 30,
+    "window_days": 90,
+    "rank_cap": 10,
+    "$comment": "The recursive loop (paper/learning.py). Every stat from the book's own record is weighted w = n/(n+shrink_n) before it changes anything: at n=7 a sleeve's record is a nudge, at n=30 it is half-trusted. Hold and ladder priors engage only at min_n. Adjustments are re-derived from the trailing window every tick — nothing accumulates in hidden state, so a bad month un-learns itself as it rolls out."
+  },
+
+  "composition": {
+    "min_target_support": 35,
+    "exit_target_support": 20,
+    "use_composed_levels": true,
+    "$comment": "The composed view (paper/valuation.py) prices a trade on four independent readings of it: the CHART (is the target a level that has been tested and held, or a projection into open field), the TRUSTED VOICES (do the KOL targets cluster near the agent's, and do those people have a record), the REGIME (does this asset belong in the tape the desk believes it is in — the brain's own macro_alignment_score), and the PRICE ACTION (is the target reachable in ATR terms, is the trend with the trade). Support runs 0-100 from a neutral 50.",
+    "$uses_comment": "It drives four things. SIZE: support shifts rank by up to +/-10 points, so a target three views agree on carries more size than a projection nobody is watching. ADMISSION: below min_target_support the trade is refused with Blocker.UNSUPPORTED_TARGET. LEVELS: when the agent projected past a tested level, the composed target replaces it — which is honest about R:R rather than flattering it. EXIT: a position whose case falls below exit_target_support is closed, subject to min_hold_days like any other thesis exit.",
+    "$scope_comment": "Deliberately paper-side. scoring/levels.py is shared with the hand-traded desk, the alerts and the SPA cards; this layer judges its output without moving it, so the composition can be proven on the paper book's own record before anything the desk reads changes."
+  },
+
+  "execution": {
+    "slippage_bps": 5,
+    "fee_bps": 0,
+    "$comment": "Paper fills cross the spread by 5bps in the adverse direction. Fees are zero — this book is measuring signal quality, not a broker's commission schedule."
+  }
+}

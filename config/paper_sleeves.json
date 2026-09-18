@@ -1,0 +1,174 @@
+{
+  "$schema_version": "1.0",
+  "description": "Attribution taxonomy for the paper book: which sleeve a position belongs to, which class that sleeve rolls up into, and which macro regime the sleeve is an expression of. This is a REPORTING map, not a trading rule — it never gates a fill. Correlated-position caps come from config/correlation_buckets.json; this file exists so P&L can be read as 'the hard-asset book made money and the risk-on book didn't'.",
+
+  "$resolution_rules": {
+    "order": "sleeves are evaluated in declaration order; the first whose membership contains the ticker wins",
+    "membership": "union of (a) the watchlist_tickers of the referenced `theme` in config/asset_themes.json, (b) the members of each referenced correlation `bucket`, and (c) the explicit `tickers` list here",
+    "unmatched": "falls through to the sleeve `unclassified`, which is reported honestly rather than silently folded into another sleeve",
+    "resolution_time": "read time, not entry time — re-classifying a ticker here corrects history instead of leaving old positions mis-bucketed"
+  },
+
+  "classes": {
+    "hard_assets": {
+      "label": "Hard assets",
+      "note": "Real things and the equities that dig them up. The debasement / commodity-inflation expression."
+    },
+    "equities": { "label": "Equities", "note": "Listed equity risk, sliced by sector and theme." },
+    "crypto": { "label": "Crypto", "note": "Digital assets and their listed proxies." },
+    "rates_fx": { "label": "Rates & FX", "note": "Duration and dollar — the macro hedges." },
+    "volatility": { "label": "Volatility", "note": "Explicit vol exposure." },
+    "cash": { "label": "Cash", "note": "Dry powder held deliberately, not by accident." },
+    "other": { "label": "Unclassified", "note": "Nothing has been mapped yet. A large number here is a to-do, not a category." }
+  },
+
+  "sleeves": [
+    {
+      "id": "crypto",
+      "label": "Crypto",
+      "class": "crypto",
+      "theme": "crypto",
+      "buckets": ["crypto_l1", "crypto_alt"],
+      "tickers": ["MSTR", "HOOD", "BITO", "IBIT", "GBTC"],
+      "regimes": ["risk_on_expansion", "monetary_debasement_hard_asset"]
+    },
+    {
+      "id": "precious_metals",
+      "label": "Precious metals",
+      "class": "hard_assets",
+      "theme": "precious_metals",
+      "buckets": ["precious_metals"],
+      "tickers": ["SILJ", "PAAS", "WPM", "FNV", "KGC", "AU"],
+      "regimes": ["monetary_debasement_hard_asset", "commodity_led_inflation"]
+    },
+    {
+      "id": "uranium",
+      "label": "Uranium & nuclear",
+      "class": "hard_assets",
+      "theme": "uranium",
+      "buckets": ["energy_uranium"],
+      "tickers": ["NLR", "SMR", "LEU", "OKLO"],
+      "regimes": ["commodity_led_inflation", "monetary_debasement_hard_asset"]
+    },
+    {
+      "id": "industrial_metals",
+      "label": "Copper & industrial metals",
+      "class": "hard_assets",
+      "tickers": ["FCX", "COPX", "CPER", "XLB", "SCCO", "TECK", "RIO", "BHP", "VALE",
+                  "X", "NUE", "AA", "MP", "ALB", "LIT", "REMX"],
+      "regimes": ["commodity_led_inflation", "risk_on_expansion"],
+      "note": "The electrification / grid-buildout expression. Absent from asset_themes.json, which is why three of the book's first twelve positions had no classification."
+    },
+    {
+      "id": "energy",
+      "label": "Energy",
+      "class": "hard_assets",
+      "theme": "energy",
+      "buckets": ["energy_oil"],
+      "tickers": ["UNG", "BOIL", "SLB", "HAL", "PXD", "DVN", "OXY"],
+      "regimes": ["commodity_led_inflation", "monetary_debasement_hard_asset"]
+    },
+    {
+      "id": "agriculture",
+      "label": "Agriculture",
+      "class": "hard_assets",
+      "theme": "agriculture",
+      "tickers": ["SOYB", "JJG", "NTR", "FMC", "BG", "TSN", "DE"],
+      "regimes": ["commodity_led_inflation"]
+    },
+    {
+      "id": "technology_ai",
+      "label": "Technology & AI",
+      "class": "equities",
+      "theme": "technology_ai",
+      "buckets": ["tech_megacap", "tech_indices"],
+      "tickers": ["PLTR", "MU", "ARM", "DELL", "VRT", "ANET", "CRWD", "SNOW", "AI"],
+      "regimes": ["risk_on_expansion"]
+    },
+    {
+      "id": "defense",
+      "label": "Defense & aerospace",
+      "class": "equities",
+      "theme": "defense",
+      "buckets": ["defense"],
+      "tickers": ["KTOS", "AVAV", "RHM", "BA"],
+      "regimes": ["risk_off_contraction", "commodity_led_inflation"]
+    },
+    {
+      "id": "financials",
+      "label": "Financials",
+      "class": "equities",
+      "tickers": ["XLF", "BAC", "JPM", "GS", "MS", "WFC", "C", "KRE", "SCHW", "BRK.B"],
+      "regimes": ["risk_on_expansion"]
+    },
+    {
+      "id": "healthcare",
+      "label": "Healthcare",
+      "class": "equities",
+      "tickers": ["XLV", "LLY", "UNH", "JNJ", "PFE", "MRK", "ABBV", "XBI", "IBB", "AMGN"],
+      "regimes": ["risk_off_contraction", "transitional_chop"]
+    },
+    {
+      "id": "industrials",
+      "label": "Industrials",
+      "class": "equities",
+      "tickers": ["XLI", "CAT", "HON", "UNP", "GE", "ETN", "PH", "EMR"],
+      "regimes": ["risk_on_expansion", "commodity_led_inflation"]
+    },
+    {
+      "id": "defensives",
+      "label": "Staples, utilities & real estate",
+      "class": "equities",
+      "tickers": ["XLP", "XLU", "XLRE", "VNQ", "IYR", "O", "NEE", "DUK", "SO",
+                  "WMT", "COST", "PG", "KO", "PEP"],
+      "regimes": ["risk_off_contraction", "transitional_chop"],
+      "note": "The three bond-proxy sectors travel together on rates; splitting them would make three sleeves that always say the same thing."
+    },
+    {
+      "id": "consumer_cyclical",
+      "label": "Consumer cyclical",
+      "class": "equities",
+      "tickers": ["XLY", "HD", "NKE", "SBUX", "MCD", "LOW", "TGT"],
+      "regimes": ["risk_on_expansion"]
+    },
+    {
+      "id": "broad_market",
+      "label": "Broad market",
+      "class": "equities",
+      "buckets": ["broad_market"],
+      "tickers": ["SPY", "IWM", "VOO", "IVV", "DIA", "VTI", "RSP", "EFA", "EEM"],
+      "regimes": ["risk_on_expansion"]
+    },
+    {
+      "id": "rates",
+      "label": "Rates & duration",
+      "class": "rates_fx",
+      "buckets": ["rates"],
+      "tickers": ["TLT", "IEF", "SHY", "TBT", "TMV", "AGG", "LQD", "HYG"],
+      "regimes": ["risk_off_contraction", "transitional_chop"]
+    },
+    {
+      "id": "fx_dollar",
+      "label": "Dollar & FX",
+      "class": "rates_fx",
+      "buckets": ["fx_usd"],
+      "tickers": ["DXY", "UUP", "UDN", "FXE", "FXY"],
+      "regimes": ["risk_off_contraction", "monetary_debasement_hard_asset"]
+    },
+    {
+      "id": "volatility",
+      "label": "Volatility",
+      "class": "volatility",
+      "tickers": ["VIX", "VXX", "UVXY", "SVXY", "VIXY"],
+      "regimes": ["risk_off_contraction"]
+    },
+    {
+      "id": "cash",
+      "label": "Cash equivalents",
+      "class": "cash",
+      "theme": "cash",
+      "tickers": ["BIL", "SGOV", "SHV", "USFR"],
+      "regimes": ["risk_off_contraction", "transitional_chop"]
+    }
+  ]
+}

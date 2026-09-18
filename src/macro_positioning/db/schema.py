@@ -903,6 +903,276 @@ SCHEMA_STATEMENTS = [
     CREATE INDEX IF NOT EXISTS idx_alerts_dedupe
         ON alerts (ticker, rule, fired_at DESC)
     """,
+    # ─── Paper trading book ───────────────────────────────────────────
+    # A simulated account that executes the signal stack's own reads, so
+    # "would this desk have made money" stops being an argument and
+    # becomes a balance. Deliberately its OWN namespace: `trades` /
+    # `trade_plans` are the hand-traded funnel and must not be polluted
+    # with machine fills.
+    #
+    # The mandate (starting equity, sizing band, cash floor, caps) is
+    # snapshotted onto the portfolio row as `mandate_json` at creation.
+    # Editing config/paper_trading.json afterwards does NOT retroactively
+    # rewrite a running book's rules — a P&L curve produced under one
+    # mandate stays interpretable.
+    """
+    CREATE TABLE IF NOT EXISTS paper_portfolios (
+        portfolio_id     TEXT PRIMARY KEY,
+        name             TEXT NOT NULL,
+        base_currency    TEXT NOT NULL DEFAULT 'USD',
+        starting_equity  REAL NOT NULL,
+        cash             REAL NOT NULL,
+        status           TEXT NOT NULL DEFAULT 'active',  -- active | paused | closed
+        mandate_json     TEXT NOT NULL,
+        created_at       TEXT NOT NULL,
+        updated_at       TEXT,
+        last_tick_at     TEXT,
+        notes            TEXT
+    )
+    """,
+    # One row per lot-less aggregated position. Adds average into
+    # `avg_price`; trims realize against it and bank into
+    # `realized_pnl`. `status='open'` rows are the book.
+    """
+    CREATE TABLE IF NOT EXISTS paper_positions (
+        position_id       TEXT PRIMARY KEY,
+        portfolio_id      TEXT NOT NULL,
+        ticker            TEXT NOT NULL,
+        side              TEXT NOT NULL,          -- LONG | SHORT
+        qty               REAL NOT NULL,
+        avg_price         REAL NOT NULL,
+        opened_at         TEXT NOT NULL,
+        closed_at         TEXT,
+        status            TEXT NOT NULL,          -- open | closed
+        stop              REAL,
+        target            REAL,
+        -- Conviction + provenance snapshotted at entry, then refreshed on
+        -- every tick so the UI can show "bought at 0.71, reads 0.34 now".
+        rank_at_entry       REAL,                  -- 0-100 percentile at entry
+        rank_now            REAL,                  -- refreshed every tick
+        target_weight_pct   REAL,
+        thesis            TEXT,
+        bucket_id         TEXT,
+        source_json       TEXT,                   -- {score_id, grade, signal_agg summary}
+        realized_pnl      REAL NOT NULL DEFAULT 0,
+        fees_paid         REAL NOT NULL DEFAULT 0,
+        high_water_price  REAL,                   -- best mark seen, for the giveback trail
+        last_mark         REAL,
+        last_mark_at      TEXT,
+        partial_taken     INTEGER NOT NULL DEFAULT 0,  -- 1 once the target trim has fired
+        FOREIGN KEY (portfolio_id) REFERENCES paper_portfolios (portfolio_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_paper_positions_open
+        ON paper_positions (portfolio_id, status, ticker)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_paper_positions_closed
+        ON paper_positions (portfolio_id, closed_at DESC)
+    """,
+    # Immutable fill log. Every cash movement in the book is one row here;
+    # `cash` on the portfolio is the running total of these plus the
+    # opening deposit, and the reconciler asserts that.
+    """
+    CREATE TABLE IF NOT EXISTS paper_orders (
+        order_id      TEXT PRIMARY KEY,
+        portfolio_id  TEXT NOT NULL,
+        position_id   TEXT,
+        decision_id   TEXT,
+        tick_id       TEXT,
+        ticker        TEXT NOT NULL,
+        action        TEXT NOT NULL,        -- OPEN | ADD | TRIM | EXIT
+        side          TEXT NOT NULL,        -- LONG | SHORT
+        qty           REAL NOT NULL,
+        price         REAL NOT NULL,        -- fill price, slippage applied
+        ref_price     REAL,                 -- the mark before slippage
+        notional      REAL NOT NULL,
+        cash_delta    REAL NOT NULL,        -- signed effect on portfolio cash
+        realized_pnl  REAL,                 -- populated on TRIM/EXIT
+        fees          REAL NOT NULL DEFAULT 0,
+        intent        TEXT NOT NULL,        -- the Intent vocabulary term
+        rationale     TEXT,                 -- one human sentence
+        price_source  TEXT,                 -- finnhub | yfinance-5m | db-stale
+        filled_at     TEXT NOT NULL,
+        FOREIGN KEY (portfolio_id) REFERENCES paper_portfolios (portfolio_id),
+        FOREIGN KEY (position_id) REFERENCES paper_positions (position_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_paper_orders_filled
+        ON paper_orders (portfolio_id, filled_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_paper_orders_position
+        ON paper_orders (position_id, filled_at)
+    """,
+    # The semantic record: what the engine decided and *why*, including
+    # the decisions it declined to execute. A REJECT row with a blocker
+    # of `cash_floor` is the answer to "why didn't it buy the 92?" —
+    # without it the book looks arbitrary.
+    """
+    CREATE TABLE IF NOT EXISTS paper_decisions (
+        decision_id       TEXT PRIMARY KEY,
+        portfolio_id      TEXT NOT NULL,
+        tick_id           TEXT NOT NULL,
+        decided_at        TEXT NOT NULL,
+        ticker            TEXT NOT NULL,
+        action            TEXT NOT NULL,      -- OPEN | ADD | TRIM | EXIT | HOLD | REJECT
+        intent            TEXT NOT NULL,      -- why, from the Intent vocabulary
+        side              TEXT,
+        rank              REAL,                -- 0-100 percentile
+        rank_prev         REAL,
+        target_weight_pct REAL,
+        current_weight_pct REAL,
+        notional          REAL,
+        executed          INTEGER NOT NULL DEFAULT 0,
+        blocker           TEXT,               -- Blocker vocabulary term when executed=0
+        headline          TEXT NOT NULL,      -- the sentence a human reads
+        rationale_json    TEXT,               -- rank components + constraint state
+        position_id       TEXT,
+        order_id          TEXT,
+        FOREIGN KEY (portfolio_id) REFERENCES paper_portfolios (portfolio_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_paper_decisions_tick
+        ON paper_decisions (portfolio_id, decided_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_paper_decisions_ticker
+        ON paper_decisions (portfolio_id, ticker, decided_at DESC)
+    """,
+    # Mark-to-market time series — one row per tick. This is what the
+    # equity curve renders from; it is also the only record of what the
+    # book looked like at a point in time, since positions mutate.
+    """
+    CREATE TABLE IF NOT EXISTS paper_equity_snapshots (
+        snapshot_id    TEXT PRIMARY KEY,
+        portfolio_id   TEXT NOT NULL,
+        tick_id        TEXT,
+        taken_at       TEXT NOT NULL,
+        equity         REAL NOT NULL,
+        cash           REAL NOT NULL,
+        deployed       REAL NOT NULL,
+        deployed_pct   REAL NOT NULL,
+        cash_pct       REAL NOT NULL,
+        open_positions INTEGER NOT NULL,
+        unrealized_pnl REAL NOT NULL,
+        realized_pnl_to_date REAL NOT NULL,
+        positions_json TEXT,
+        FOREIGN KEY (portfolio_id) REFERENCES paper_portfolios (portfolio_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_paper_equity_taken
+        ON paper_equity_snapshots (portfolio_id, taken_at DESC)
+    """,
+    # One row per OPEN position per tick: every input the engine read on it
+    # at that moment, next to where price and P&L were. This is the
+    # trajectory the learning loop needs to answer "which input moved
+    # first, and was it right" — a question the decision log cannot
+    # answer because HOLD rows only record that nothing happened.
+    """
+    CREATE TABLE IF NOT EXISTS paper_position_snapshots (
+        snapshot_id     TEXT PRIMARY KEY,
+        portfolio_id    TEXT NOT NULL,
+        position_id     TEXT NOT NULL,
+        tick_id         TEXT,
+        taken_at        TEXT NOT NULL,
+        ticker          TEXT NOT NULL,
+        side            TEXT NOT NULL,
+        days_held       REAL,
+        mark            REAL,
+        unrealized_r    REAL,               -- open P&L in initial-risk units
+        unrealized_pct  REAL,
+        weight_pct      REAL,
+        rank            REAL,
+        score           INTEGER,
+        read_side       TEXT,               -- LONG | SHORT | WATCH | AVOID this tick
+        signal_direction TEXT,              -- blend bias_direction
+        signal_confidence REAL,
+        signal_n        INTEGER,
+        support         REAL,               -- composed-view total
+        support_structure REAL,             -- the four views' deltas
+        support_voices  REAL,
+        support_regime  REAL,
+        support_price   REAL,
+        regime_label    TEXT,
+        macro_alignment INTEGER,
+        exit_signal     TEXT,               -- thesis exit being watched, if any
+        exit_signal_streak INTEGER,
+        FOREIGN KEY (portfolio_id) REFERENCES paper_portfolios (portfolio_id),
+        FOREIGN KEY (position_id) REFERENCES paper_positions (position_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_paper_pos_snap_position
+        ON paper_position_snapshots (position_id, taken_at)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_paper_pos_snap_taken
+        ON paper_position_snapshots (portfolio_id, taken_at DESC)
+    """,
+    # ─── Stock Unlocked call tracker ──────────────────────────────────
+    # One row per actionable call from the Stock Unlocked Trades channel,
+    # keyed by the document that posted it. The channel states entry,
+    # targets and stop in words, so each call can be resolved against
+    # the tape (which level printed FIRST) and the desk's own lifecycle
+    # posts ("Target 2 HIT", "stopped out") are kept alongside so the
+    # two accounts can be compared. `verdict` is the tape's word;
+    # `desk_verdict` is the channel's. They disagree sometimes (KTOS
+    # gapped through its stop and then ran to every target) and that
+    # disagreement is data, not an error to reconcile away.
+    #
+    # Scoring is incremental: a call is re-walked while it is still
+    # `open` and inside its horizon, then frozen. Nothing here is
+    # derived from `signals` — the tracker reads the posts directly, so
+    # it survives a signal re-extract.
+    """
+    CREATE TABLE IF NOT EXISTS stock_unlocked_calls (
+        call_id            TEXT PRIMARY KEY,   -- documents.document_id of the entry post
+        posted_at          TEXT NOT NULL,
+        ticker             TEXT NOT NULL,
+        instrument         TEXT NOT NULL,      -- stock | crypto | option
+        trade_kind         TEXT NOT NULL,      -- day | swing
+        direction          TEXT NOT NULL,      -- long | short
+        entry              REAL,
+        stop               REAL,
+        targets_json       TEXT NOT NULL DEFAULT '[]',
+        notes              TEXT,
+        option_json        TEXT,               -- strike / expiry / premium for options
+        market_price       REAL,               -- quoted in the post
+        verdict            TEXT NOT NULL DEFAULT 'unscored',
+                           -- unscored | open | win | loss | loss_ambiguous
+                           -- | unresolved | unpriceable | no_levels
+        max_target         INTEGER NOT NULL DEFAULT 0,
+        planned_r          REAL,
+        realized_r         REAL,
+        mfe_pct            REAL,
+        mae_pct            REAL,
+        hours_to_resolve   REAL,
+        resolved_at        TEXT,
+        resolution         TEXT,               -- 1h | 5m | gap_open | ambiguous
+        price_symbol       TEXT,
+        price_source       TEXT,
+        last_price         REAL,               -- last bar seen while open
+        desk_events_json   TEXT NOT NULL DEFAULT '[]',
+        desk_verdict       TEXT,               -- win | loss | open (the channel's word)
+        desk_max_target    INTEGER NOT NULL DEFAULT 0,
+        first_scored_at    TEXT,
+        last_scored_at     TEXT,
+        score_error        TEXT
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_su_calls_posted
+        ON stock_unlocked_calls (posted_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_su_calls_verdict
+        ON stock_unlocked_calls (verdict, posted_at DESC)
+    """,
 ]
 
 
@@ -983,6 +1253,28 @@ _ADDED_COLUMNS: list[tuple[str, str, str]] = [
     # score against one computed by different logic measures the change,
     # not the market — see scoring/logic_version.py.
     ("trade_scores", "logic_version", "TEXT"),
+    # The |entry - stop| distance at the moment a paper position opened.
+    # "R" has to mean INITIAL risk: the target trim moves the stop to
+    # breakeven, and computing R off the live stop then divides by zero
+    # and silently disarms the trailing exit for the rest of the trade.
+    ("paper_positions", "initial_risk", "REAL"),
+    # Thesis-exit confirmation. A rank-decay / support-collapse / side-flip
+    # signal has to persist for N consecutive ticks before it closes a
+    # multi-week position; these track the streak in progress.
+    ("paper_positions", "exit_signal_intent", "TEXT"),
+    ("paper_positions", "exit_signal_streak", "INTEGER"),
+    ("paper_position_snapshots", "read_side", "TEXT"),
+    # Per-position hold horizon, derived at fill (paper/horizon.py). The
+    # mandate holds only bounds and a fallback.
+    ("paper_positions", "expected_hold_days", "REAL"),
+    ("paper_positions", "min_hold_days", "REAL"),
+    ("paper_positions", "confirm_ticks", "INTEGER"),
+    ("paper_position_snapshots", "expected_hold_days", "REAL"),
+    # Exit path (target vs ladder), assigned at fill from rank + support.
+    ("paper_positions", "exit_path", "TEXT"),
+    ("paper_positions", "rungs_taken", "INTEGER"),
+    ("paper_positions", "near_miss_armed", "INTEGER"),
+    ("paper_position_snapshots", "exit_path", "TEXT"),
 ]
 
 
@@ -1002,6 +1294,89 @@ def _apply_added_columns(connection: sqlite3.Connection) -> None:
             connection.execute(
                 f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
             )
+
+
+# ─── One-shot: paper book conviction(0-1) → rank(0-100 percentile) ────
+# The paper book's sizing metric was renamed and re-anchored on
+# 2026-08-28. The old number was an interpolation between two hand-picked
+# score anchors, so 0.28 looked like "28% confident" while actually
+# meaning "the 40th percentile". Rank is a percentile of the live score
+# distribution, so the number says what it appears to say.
+#
+# The two scales cannot be mixed in one column, so this renames the
+# columns and clears values that were written under the old meaning.
+# Position entry ranks are recomputed from the score each position stored
+# at entry; decision rows keep their English headline (which embeds the
+# old number in prose) and drop the numeric, since a log row honestly
+# records what was decided under the rules of its day.
+_PAPER_RANK_RENAMES = [
+    ("paper_positions", "conviction_at_entry", "rank_at_entry"),
+    ("paper_positions", "conviction_now", "rank_now"),
+    ("paper_decisions", "conviction", "rank"),
+    ("paper_decisions", "conviction_prev", "rank_prev"),
+]
+
+_PAPER_INTENT_RENAMES = {
+    "target_hit": "rung_taken",          # 2026-09-18: half-off-at-target became the ladder
+    "new_conviction": "cleared_bar",
+    "conviction_upgrade": "rank_upgrade",
+    "conviction_decay": "rank_decay",
+}
+
+
+def _migrate_paper_rank_scale(connection: sqlite3.Connection) -> None:
+    """Rename the paper book's conviction columns to rank and drop
+    old-scale values. Idempotent: a no-op once the columns are renamed."""
+
+    def columns(table: str) -> set[str]:
+        try:
+            return {r[1] for r in connection.execute(f"PRAGMA table_info({table})")}
+        except sqlite3.DatabaseError:
+            return set()
+
+    renamed_any = False
+    for table, old, new in _PAPER_RANK_RENAMES:
+        cols = columns(table)
+        if not cols or new in cols or old not in cols:
+            continue
+        connection.execute(f"ALTER TABLE {table} RENAME COLUMN {old} TO {new}")
+        renamed_any = True
+
+    if not renamed_any:
+        return
+
+    # Decision rows: the headline still tells the story in English; the
+    # numeric would be a percentile-shaped value on a 0-1 scale.
+    connection.execute("UPDATE paper_decisions SET rank = NULL, rank_prev = NULL")
+
+    # Positions: the entry rank is NOT reconstructable. The score's raw
+    # percentile is recoverable from source_json, but the rank the engine
+    # actually recorded also carried the signal / R:R / momentum
+    # adjustments, and those are not stored per position. Backfilling the
+    # base-only percentile produced a fake drift — every migrated position
+    # showed "rank 80 → 100, +20" when nothing about it had changed.
+    #
+    # An unknown entry rank is better than an invented one. These go NULL;
+    # `rank_now` refills on the next tick, and the position's stored
+    # `source_json.components` still records what the entry read was made
+    # of, in prose.
+    connection.execute("UPDATE paper_positions SET rank_at_entry = NULL, rank_now = NULL")
+
+    for old_intent, new_intent in _PAPER_INTENT_RENAMES.items():
+        connection.execute(
+            "UPDATE paper_decisions SET intent = ? WHERE intent = ?", (new_intent, old_intent)
+        )
+        connection.execute(
+            "UPDATE paper_orders SET intent = ? WHERE intent = ?", (new_intent, old_intent)
+        )
+
+    # The stored mandate carries floors on the old scale; stamping the
+    # scale marker is what makes models.Mandate.from_stored replace it.
+    connection.execute(
+        "UPDATE paper_portfolios SET mandate_json = "
+        "json_set(mandate_json, '$.scale', 'conviction_0_1') "
+        "WHERE json_extract(mandate_json, '$.scale') IS NULL"
+    )
 
 
 def _dedupe_existing_documents(connection: sqlite3.Connection) -> int:
@@ -1089,6 +1464,7 @@ def initialize_database(database_path: Path, *, allow_reinit: bool = False) -> N
         # Apply column-add migrations for tables that existed before
         # new columns were introduced.
         _apply_added_columns(connection)
+        _migrate_paper_rank_scale(connection)
         connection.commit()
 
     # Seed the manual-input known-authors picklist (idempotent — only
