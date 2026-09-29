@@ -1276,26 +1276,25 @@ def _vote_direction(sigs: list[dict]) -> str:
 # and assets listed on exchanges / OTC markets belong in discovery.
 # ---------------------------------------------------------------------------
 
-# Majors top-up beyond the Coinbase-tradeable _TRACKED_CRYPTO set, so the
-# combined crypto universe ≈ top 25 by cap.
-_MAJOR_CRYPTO_EXTRA = {
-    "BNB", "ADA", "TON", "XLM", "BCH", "DOT", "NEAR", "UNI", "ATOM",
-    "ETC", "POL", "MATIC", "ARB", "OP", "XMR",
-}
+# The hand-maintained top-up this used to carry (BNB, ADA, TON, XLM…) is
+# gone: config/crypto_universe.json derives the majors from a live cap
+# ranking intersected with Coinbase's listings, which is the same set kept
+# current instead of by hand.
 
 
 def _crypto_majors() -> set[str]:
-    """The crypto universe allowed in discovery: tracked Coinbase coins +
-    the majors top-up (≈ top 25 by cap). Deliberately NOT unioned with the
-    prices table — symbol collisions there vouch for memes (the channel's
-    "SFM" is Safemoon, but SFM is also Sprouts Farmers Market on NYSE)."""
-    universe = set(_MAJOR_CRYPTO_EXTRA)
+    """The crypto universe allowed in discovery: the ~top-25 majors.
+
+    NOT the full Coinbase set — that is ~400 coins and would put every
+    listed microcap into a feed whose whole purpose is to surface real
+    assets. And deliberately NOT unioned with the prices table either:
+    symbol collisions there vouch for memes (the channel's "SFM" is
+    Safemoon, but SFM is also Sprouts Farmers Market on NYSE)."""
     try:
-        from macro_positioning.prices.symbol_map import _TRACKED_CRYPTO
-        universe |= _TRACKED_CRYPTO
+        from macro_positioning.prices.symbol_map import crypto_majors
+        return set(crypto_majors())
     except Exception:
-        pass
-    return universe
+        return set()
 
 
 # The vision extractor hardcodes asset_class="equity", so a Solana meme

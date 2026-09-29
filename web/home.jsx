@@ -7,8 +7,26 @@
 
 function Home({ onNav }) {
   const D = window.MA_DATA || {};
-  const home = D.macroHome || { categories: [] };
+  const rawHome = D.macroHome || { categories: [] };
   const regime = D.regime || null;
+
+  // Overlay REAL prices (D.livePrices, from the prices table + FRED) onto the
+  // otherwise-mock macro tape. An asset with a live match shows its real value
+  // + a "LIVE · as of <date>" stamp; everything else is flagged MOCK so a fake
+  // number never masquerades as live. See build_live_prices_section.
+  const livePrices = D.livePrices || {};
+  const home = {
+    ...rawHome,
+    categories: (rawHome.categories || []).map(cat => ({
+      ...cat,
+      assets: (cat.assets || []).map(a => {
+        const lp = livePrices[a.asset];
+        return lp
+          ? { ...a, value: lp.value, chgPct: lp.chgPct, chg30dPct: lp.chg30dPct, _live: lp }
+          : { ...a, _mock: true };
+      }),
+    })),
+  };
 
   return (
     <div className="home-view">
@@ -19,7 +37,7 @@ function Home({ onNav }) {
       )}
 
       <div className="home-meta mono small muted">
-        Macro tape · updated {home.asOf || "—"}
+        Macro tape · <span className="home-live-dot" /> LIVE = real (prices + FRED) · MOCK = placeholder, not wired yet
       </div>
 
       <div className="home-cats">
@@ -507,6 +525,8 @@ function HomeAssetCard({ a }) {
   const valStr = isRate
     ? `${a.value.toFixed(2)}%`
     : (a.unit ? `${_fmtValue(a.value)}${a.unit}` : _fmtValue(a.value));
+  const live = a._live;
+  const asOfLabel = live && live.asOf ? _agoLabel(live.asOf) : null;
   return (
     <div className="home-card">
       <div className="home-card-head">
@@ -520,9 +540,34 @@ function HomeAssetCard({ a }) {
         <span className="home-chg-sep muted">·</span>
         <span className={`home-chg-30 ${dir30}`}>30d {chg30 >= 0 ? "+" : ""}{chg30.toFixed(1)}%</span>
       </div>
-      {a.note && <div className="home-card-note">{a.note}</div>}
+      {/* Freshness stamp: real value → green LIVE + as-of; else MOCK. */}
+      <div className="home-card-fresh mono small">
+        {live ? (
+          <span className="home-fresh-live" title={`live from prices/FRED · as of ${live.asOf}`}>
+            ● LIVE{asOfLabel ? ` · ${asOfLabel}` : ""}
+          </span>
+        ) : (
+          <span className="home-fresh-mock" title="placeholder — not wired to a live feed yet">
+            ○ MOCK
+          </span>
+        )}
+      </div>
+      {/* Notes are hand-written mock narrative — only show on MOCK cards so a
+          fabricated "spot ETF flows +$1.2B/wk" never sits beside a real price. */}
+      {a.note && !live && <div className="home-card-note">{a.note}</div>}
     </div>
   );
+}
+
+// "2026-08-08" → "today" / "1d ago" / "3d ago" / "2026-08-08".
+function _agoLabel(iso) {
+  const t = Date.parse((iso || "").slice(0, 10));
+  if (!t) return iso;
+  const days = Math.floor((Date.now() - t) / 86400000);
+  if (days <= 0) return "today";
+  if (days === 1) return "1d ago";
+  if (days < 30) return `${days}d ago`;
+  return (iso || "").slice(0, 10);
 }
 
 function _fmtValue(v) {

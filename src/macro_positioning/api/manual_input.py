@@ -251,8 +251,10 @@ def _append_training_label(path: str, verdict: dict) -> None:
     import sqlite3
     from datetime import datetime, timezone
     from macro_positioning.core.settings import settings as _s
+    from macro_positioning.db.connect import write_connection
+
     try:
-        with sqlite3.connect(_s.sqlite_path) as conn:
+        with write_connection(_s.sqlite_path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT document_id, author, raw_text, extracted_features_json, "

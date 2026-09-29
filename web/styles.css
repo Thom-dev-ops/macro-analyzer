@@ -5853,3 +5853,113 @@ body { font-size: 15.5px; }
 .pdd-book { margin: 0 0 8px; font-size: 0.8rem; }
 @media (max-width: 1500px) { .pd-detail.wider { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 1100px) { .pd-detail.wider { grid-template-columns: 1fr; } }
+
+.unl-tabs { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.unl-tabs-note { font-size: 0.78rem; }
+.unl-funnel { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px var(--pad-card) 4px; font-size: 0.72rem; }
+.unl-funnel-item { white-space: nowrap; }
+
+/* ── A position's whole arc, inside the decision detail ───────────────
+   The log shows one action at a time, so the OPEN, the TRIM and the EXIT
+   of the same trade never share a screen. This column puts them back
+   together on every row that belongs to the position, with the row you
+   opened marked so you keep your place. */
+.pdd-arc { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.pdd-arc li {
+  display: grid; grid-template-columns: 52px auto 1fr auto;
+  gap: 10px; align-items: center; font-size: 0.78rem;
+  padding: 3px 6px; border-radius: 4px; border: 1px solid transparent;
+}
+.pdd-arc li.on { background: var(--bg-card-3); border-color: var(--border-soft, var(--bg-card-3)); }
+.pdd-arc .pd-action { font-size: 0.64rem; padding: 1px 4px; }
+.pdd-arc-when { color: var(--text-mute-3); white-space: nowrap; }
+.pdd-arc-fill { color: var(--text-mute); white-space: nowrap; }
+.pdd-arc-notional { color: var(--text-mute-2); text-align: right; white-space: nowrap; }
+
+/* ── Chart Lab ─────────────────────────────────────────────────────────
+   Appended as a self-contained block: several sessions edit this file,
+   so the tab brings its own namespaced rules rather than reaching into
+   shared ones. Every selector is prefixed `cl-`. */
+.cl-view { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .cl-view { grid-template-columns: 1fr; } }
+
+.cl-meta { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.cl-input { flex: 1 1 120px; min-width: 0; padding: 6px 9px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--bg-inset); color: var(--text); font-size: 13px; }
+.cl-input-sm { flex: 0 0 64px; }
+.cl-input-wide { flex: 2 1 180px; }
+.cl-input-bench { flex: 1 1 auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.cl-dropzone { border: 1.5px dashed var(--line); border-radius: 8px; padding: 22px 12px;
+  text-align: center; color: var(--text-mute); font-size: 13px; cursor: pointer;
+  transition: border-color .12s, background .12s; }
+.cl-dropzone:hover, .cl-dropzone.is-over { border-color: var(--accent); background: var(--accent-weak); }
+.cl-dropzone.is-busy { opacity: .6; pointer-events: none; }
+
+.cl-bench-bar { display: flex; gap: 8px; align-items: center; }
+.cl-empty { padding: 18px 2px; font-size: 13px; }
+.cl-err { margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 12.5px;
+  color: var(--red); background: rgba(200,81,74,.08); border: 1px solid rgba(200,81,74,.25); }
+
+.cl-queue-row { display: flex; gap: 10px; align-items: center; padding: 7px 0;
+  border-bottom: 1px solid var(--line-soft); }
+.cl-queue-row:last-child { border-bottom: 0; }
+.cl-thumb { width: 54px; height: 36px; object-fit: cover; border-radius: 4px;
+  border: 1px solid var(--line); cursor: pointer; background: var(--bg-inset); }
+.cl-thumb-none { cursor: default; }
+.cl-queue-body { flex: 1; min-width: 0; }
+.cl-queue-title { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cl-queue-sub { font-size: 11px; }
+.cl-badge { font-size: 10.5px; padding: 2px 7px; border-radius: 99px; border: 1px solid var(--line); }
+.cl-badge-ok { color: var(--green); border-color: var(--green-soft); }
+
+.cl-card { padding-bottom: 6px; }
+.cl-resolved { font-size: 12px; margin-left: 8px; font-weight: 400; }
+.cl-sec { padding: 11px 0; border-top: 1px solid var(--line-soft); }
+.cl-sec-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-mute); margin-bottom: 7px; }
+.cl-tag { font-size: 10.5px; text-transform: none; letter-spacing: 0; padding: 1px 7px;
+  border-radius: 99px; background: var(--bg-inset); border: 1px solid var(--line); }
+.cl-when { text-transform: none; letter-spacing: 0; }
+.cl-side { font-size: 10.5px; padding: 1px 7px; border-radius: 99px; text-transform: none; }
+.cl-side-long { color: var(--green); border: 1px solid var(--green-soft); }
+.cl-side-short { color: var(--red); border: 1px solid var(--red-soft); }
+
+.cl-readline { font-size: 13px; }
+.cl-notes { font-size: 12px; margin-top: 3px; }
+.cl-role { color: var(--text-mute); font-size: 12px; min-width: 88px; display: inline-block; }
+
+.cl-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.cl-table th { text-align: right; font-weight: 500; color: var(--text-mute);
+  font-size: 11px; padding-bottom: 3px; }
+.cl-table th:first-child { text-align: left; }
+.cl-table td { padding: 2px 0; text-align: right; }
+.cl-table td:first-child { text-align: left; }
+
+.cl-rails { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; margin-bottom: 6px; }
+.cl-prov { display: flex; gap: 8px; font-size: 11.5px; padding: 1px 0; align-items: baseline; }
+.cl-prov-rej { opacity: .72; }
+.cl-zone { display: flex; gap: 8px; font-size: 12.5px; padding: 1.5px 0; align-items: baseline; }
+.cl-zone-tag { font-size: 10px; text-transform: uppercase; width: 26px; }
+.cl-zone-sup { color: var(--green); }
+.cl-zone-res { color: var(--red); }
+
+.cl-voice { padding: 3px 0; }
+.cl-voice-top { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; flex-wrap: wrap; }
+.cl-voice-basis { font-size: 11.5px; padding-left: 88px; }
+.cl-stale { font-size: 10.5px; color: var(--amber); }
+
+.cl-grade { font-size: 15px; font-weight: 600; text-transform: none; letter-spacing: 0; }
+.cl-comp { display: flex; align-items: center; gap: 9px; font-size: 11.5px; padding: 1px 0; }
+.cl-comp-name { flex: 0 0 168px; color: var(--text-mute); }
+.cl-stub { margin-left: 6px; font-size: 9.5px; padding: 0 5px; border-radius: 99px;
+  border: 1px solid var(--line); color: var(--text-mute); }
+.cl-comp-bar { flex: 1; height: 5px; border-radius: 3px; background: var(--bg-inset); overflow: hidden; }
+.cl-comp-fill { display: block; height: 100%; background: var(--accent); }
+.cl-comp-val { flex: 0 0 74px; text-align: right; }
+
+.cl-exit { display: flex; gap: 8px; font-size: 12.5px; padding: 1.5px 0; align-items: baseline; }
+
+.cl-warn { margin: 8px 0 0; padding: 7px 10px; border-radius: 6px; font-size: 12.5px;
+  color: var(--amber); background: rgba(191,143,52,.08); border: 1px solid rgba(191,143,52,.28); }

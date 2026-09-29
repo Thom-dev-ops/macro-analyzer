@@ -56,19 +56,20 @@ const NAV = [
       { id: "sources",   label: "Sources",      num: "U2" },
       { id: "influence", label: "Influence",    num: "U2b" },
       { id: "inbox",     label: "Manual input", num: "U3" },
+      { id: "chartlab",  label: "Chart lab",    num: "U4" },
     ],
   },
   {
-    id: "paper", label: "Paper book",
+    id: "paper", label: "Paper trading",
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 17.5 9 11l3.5 3.5L20.5 6"/><path d="M15.5 6h5v5"/><path d="M3.5 20.5h17"/></svg>,
-  },
-  {
-    id: "cohort", label: "Cohort book",
-    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="9" r="2.6"/><circle cx="16.5" cy="7.5" r="2"/><path d="M3.5 19c0-2.8 2-4.5 4.5-4.5s4.5 1.7 4.5 4.5"/><path d="M14.5 19c0-2.2 1.4-3.6 3.2-3.6 1.6 0 3 1.1 3.2 3"/></svg>,
-  },
-  {
-    id: "unlocked", label: "Stock Unlocked",
-    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="10.5" width="16" height="10" rx="1.8"/><path d="M8 10.5V7.5a4 4 0 0 1 7.6-1.7"/><path d="M12 14.5v2.5"/></svg>,
+    // Three books, one section. Each trades a different source on the
+    // same engine: the model's own signal stack, the Feather Hands
+    // cohort's calls as they are made, and Stock Unlocked's text calls.
+    children: [
+      { id: "paper",    label: "Macro Analyzer Model", num: "T1" },
+      { id: "cohort",   label: "FeatherHands",         num: "T2" },
+      { id: "unlocked", label: "Stock Unlocked",       num: "T3" },
+    ],
   },
   {
     id: "journal", label: "Journal",
@@ -85,10 +86,8 @@ const GROUP_OF = {
   home: "home",
   positioning: "positioning", concepts: "positioning", identify: "positioning", live: "positioning",
   journal: "journal",
-  paper: "paper",
-  cohort: "cohort",
-  unlocked: "unlocked",
-  streams: "streams", sources: "streams", influence: "streams", inbox: "streams",
+  paper: "paper", cohort: "paper", unlocked: "paper",
+  streams: "streams", sources: "streams", influence: "streams", inbox: "streams", chartlab: "streams",
   dev: "dev",
 };
 
@@ -100,13 +99,14 @@ const SECTIONS = {
   identify:    ["Funnel", "Identify"],
   live:        ["Funnel", "Live trades"],
   journal:     ["Review", "Journal"],
-  paper:       ["Execution", "Paper book"],
-  cohort:      ["Execution", "Cohort book — Feather Hands"],
-  unlocked:    ["Execution", "Stock Unlocked — call tracker"],
+  paper:       ["Paper trading", "Macro Analyzer Model"],
+  cohort:      ["Paper trading", "FeatherHands"],
+  unlocked:    ["Paper trading", "Stock Unlocked"],
   streams:     ["Intelligence", "Theme trends"],
   sources:     ["Intelligence", "Sources"],
   influence:   ["Intelligence", "Influence"],
   inbox:       ["Intelligence", "Manual input"],
+  chartlab:    ["Intelligence", "Chart lab"],
   dev:         ["System", "Dev"],
 };
 
@@ -286,6 +286,7 @@ function App() {
         {view === "streams" && <Streams />}
         {view === "dev" && <Dev />}
         {view === "inbox" && <Inbox />}
+        {view === "chartlab" && <ChartLab />}
         {view === "influence" && <Influence />}
         {view === "asset" && assetSig && (
           <AssetPage

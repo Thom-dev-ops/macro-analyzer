@@ -17,6 +17,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from macro_positioning.core.settings import settings
+from macro_positioning.db.connect import write_connection
 from macro_positioning.rules.gate import (
     TradeProposal,
     evaluate_trade_proposal,
@@ -27,7 +28,7 @@ router = APIRouter(tags=["rules"])
 
 
 def _open_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(settings.sqlite_path)
+    conn = write_connection()
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 

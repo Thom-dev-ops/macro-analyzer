@@ -1692,16 +1692,25 @@ def build_live_signals_section() -> list[dict]:
                 """
             ).fetchall()
             # Real-ticker filter: keep priced names (equities + majors) or
-            # tracked crypto; drop trenching/memecoin junk (TOBY, UNEE, CULT,
-            # NYAN…). "Live signals" is the core feed, not a memecoin scanner.
-            from macro_positioning.prices.symbol_map import _TRACKED_CRYPTO
+            # coins with a Coinbase book; drop trenching/memecoin junk (TOBY,
+            # UNEE, CULT, NYAN…). "Live signals" is the core feed, not a
+            # memecoin scanner. Resolving first is what makes the crypto half
+            # work at all: these tickers arrive as PAIRS (BTC/USDT, KINS/SOL),
+            # and a raw pair never matched a coin set.
+            from macro_positioning.prices.symbol_map import is_crypto, resolve_symbol
             _priced = {row[0] for row in conn.execute("SELECT DISTINCT ticker FROM prices")}
     except sqlite3.OperationalError:
         # signals table not yet created (pre-migration DB)
         return []
 
     def _is_real(t: str) -> bool:
-        return bool(t) and (t in _priced or t in _TRACKED_CRYPTO)
+        key = resolve_symbol(t or "")
+        if not key:
+            return False
+        # An equity still has to have bars — `resolve_symbol` lets any
+        # plausible 1–5 letter string through, which is how junk like TOBY
+        # gets this far. A coin only has to be tradeable.
+        return key in _priced or is_crypto(key)
 
     rows = [r for r in rows if _is_real(r["asset_ticker"])][:8]
     out: list[dict] = []

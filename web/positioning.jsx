@@ -676,6 +676,11 @@ async function markConcept({ asset, side, score, tier, thesis, source, reason })
     tradePlanId: null,
   };
   let deduped = false;
+  // Whether the row actually reached `trade_concepts`. A non-2xx response
+  // is NOT a thrown error, so the old code fell straight past `if (r.ok)`
+  // and reported success on a 500 — the funnel said "marked" while the
+  // write had failed, and the mark vanished on reload.
+  let persisted = false;
   try {
     const r = await fetch("/api/funnel/concepts", {
       method: "POST",
@@ -697,6 +702,9 @@ async function markConcept({ asset, side, score, tier, thesis, source, reason })
       local.id = c.concept_id || local.id;
       local.markedAt = (c.marked_at || local.markedAt).replace("T", " ").slice(0, 16);
       if (deduped) local.thesis = c.thesis_text || local.thesis;
+      persisted = true;
+    } else {
+      console.warn("markConcept: server rejected the write", r.status);
     }
   } catch (e) {
     // Offline / static preview: keep the optimistic row so the funnel
@@ -711,7 +719,104 @@ async function markConcept({ asset, side, score, tier, thesis, source, reason })
   } else {
     D.concepts = (D.concepts || []).concat([local]);
   }
-  return { concept: local, deduped: deduped || !!existing };
+  return { concept: local, deduped: deduped || !!existing, persisted };
+}
+
+// Tradeable directions a plan can actually carry.
+function normalisePlanSide(...candidates) {
+  for (const c of candidates) {
+    const v = String(c || "").toUpperCase();
+    if (v === "LONG" || v === "SHORT") return v;
+  }
+  return "LONG";
+}
+
+// ── Promote a concept to a draft plan (funnel step ③) ───────────────────
+// Writes through to /api/funnel/plans, then mirrors the row into MA_DATA in
+// the client shape /identify renders. Before this existed the SPA created
+// plans in memory only: /concepts built the row, /identify rendered it, and
+// a reload threw it away — the funnel looked like it moved and hadn't.
+//
+// Returns {plan, persisted}. `persisted:false` means the optimistic row is
+// all there is (offline, or a static preview), so callers can say so rather
+// than implying the plan is safe.
+async function promoteConceptToPlan(concept, { seed } = {}) {
+  const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const local = {
+    id: `plan-${Date.now().toString(36)}`,
+    conceptId: concept.id,
+    asset: concept.asset,
+    // A plan needs a tradeable direction. Tier-3 names carry side "WATCH"
+    // and tier-avoid carry "AVOID" — real reads, but not something you can
+    // place. Prefer the technical agent's own direction, then fall back to
+    // LONG; the plan is a draft and /identify is where the side is set.
+    side: normalisePlanSide(
+      concept.sideAtMark, (seed && seed.side), (seed && seed.levelSide)
+    ),
+    entry: (seed && seed.entry) ?? null,
+    stop: (seed && seed.stop) ?? null,
+    targets: (seed && seed.targets) || [],
+    sizeUsd: null,
+    sizeR: 1.0,
+    timeHorizon: "swing",
+    thesis: concept.thesis || (seed && seed.thesis) || "",
+    invalidation: "",
+    gateStatus: "unchecked",
+    status: "draft",
+    tradeId: null,
+    createdAt: now,
+    activatedAt: null,
+  };
+
+  let persisted = false;
+  try {
+    const r = await fetch("/api/funnel/plans", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        asset_id: local.asset,
+        side: local.side,
+        concept_id: concept.id,
+        entry: local.entry,
+        stop: local.stop,
+        targets: local.targets,
+        size_r: local.sizeR,
+        time_horizon: local.timeHorizon,
+        thesis: local.thesis,
+      }),
+    });
+    if (r.ok) {
+      const j = await r.json();
+      const pl = j.plan || {};
+      if (pl.plan_id) {
+        local.id = pl.plan_id;
+        local.createdAt = (pl.created_at || local.createdAt).replace("T", " ").slice(0, 16);
+        persisted = true;
+      }
+    }
+  } catch (e) {
+    // Offline / static preview: keep the optimistic row so the funnel
+    // still moves. It just won't survive the next reload.
+  }
+
+  const D = window.MA_DATA;
+  D.plans = (D.plans || []).concat([local]);
+  concept.status = "promoted";
+  concept.promotedAt = now;
+  concept.tradePlanId = local.id;
+
+  // Keep the server's concept row in step — without this the concept
+  // reappears as "active" on the next load and can be promoted twice.
+  if (persisted) {
+    try {
+      await fetch(`/api/funnel/concepts/${encodeURIComponent(concept.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "promoted", trade_plan_id: local.id }),
+      });
+    } catch (e) { /* the plan is what matters; status catches up on reload */ }
+  }
+  return { plan: local, persisted };
 }
 
 // Age of a timestamp, in the shortest unit that still reads precisely.

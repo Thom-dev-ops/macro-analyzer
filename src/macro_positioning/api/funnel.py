@@ -21,16 +21,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from macro_positioning.core.settings import settings
+from macro_positioning.db.connect import write_connection
 
 
 router = APIRouter(prefix="/api/funnel", tags=["funnel"])
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(settings.sqlite_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+    # 5s used to be the timeout here, which is shorter than the hourly
+    # alert-watch write pass — so marking or promoting a concept 500'd at
+    # random for minutes at a time. See db/connect.py.
+    return write_connection()
 
 
 def _now() -> str:
@@ -106,6 +107,11 @@ class ConceptPatchPayload(BaseModel):
     thesis_text: Optional[str] = None
     status: Optional[str] = None
     retire_reason: Optional[str] = None
+    # Set when a concept is promoted, so the concept row points at the plan
+    # it became. Without it `trade_concepts.trade_plan_id` stayed NULL and
+    # the lineage chain /live renders (trade → plan → concept) was broken
+    # at its last link for every promoted concept.
+    trade_plan_id: Optional[str] = None
 
 
 @router.get("/concepts")
@@ -187,6 +193,9 @@ def patch_concept(concept_id: str, payload: ConceptPatchPayload) -> dict[str, An
         if payload.retire_reason is not None:
             sets.append("retire_reason = ?")
             args.append(payload.retire_reason)
+        if payload.trade_plan_id is not None:
+            sets.append("trade_plan_id = ?")
+            args.append(payload.trade_plan_id)
         sets.append("updated_at = ?")
         args.append(now)
         args.append(concept_id)

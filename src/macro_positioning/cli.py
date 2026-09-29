@@ -1016,6 +1016,414 @@ def cmd_insiders_status(_: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# chart lab — single-chart, single-ticker bench
+# ---------------------------------------------------------------------------
+
+def _chart_fmt(value, digits: int = 4) -> str:
+    """Prices vary from 0.0001 to 100000 across this book — don't force 2dp."""
+    if value is None:
+        return "—"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(v) >= 1000:
+        return f"{v:,.2f}"
+    if abs(v) >= 1:
+        return f"{v:,.3f}".rstrip("0").rstrip(".")
+    return f"{v:.{digits + 2}f}".rstrip("0").rstrip(".")
+
+
+def cmd_chart_add(args: argparse.Namespace) -> int:
+    """Park a chart image as a desk document awaiting a read."""
+    from macro_positioning.chartlab import store as chartlab_store
+
+    try:
+        drop = chartlab_store.add_chart(
+            args.image,
+            ticker=args.ticker,
+            timeframe=args.timeframe,
+            note=args.note or "",
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"chart add failed: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Parked {Path(args.image).name}")
+    print(f"  document_id : {drop.document_id}")
+    print(f"  stored at   : {drop.attachment_path}")
+    print(f"  source_id   : {drop.source_id}")
+    print(f"  ticker      : {drop.ticker or '(undeclared)'}")
+    print()
+    print("Next: read it (free, either way)")
+    print(f"  in this session : macro-positioning chart read --doc {drop.document_id}")
+    print(f"  unattended      : macro-positioning chart read --doc {drop.document_id} --auto")
+    return 0
+
+
+def cmd_chart_grab(args: argparse.Namespace) -> int:
+    """Park a chart without typing a path — clipboard, screenshot, or inbox.
+
+    You cannot drag a file into this terminal, so intake comes to the
+    image instead. Defaults to the clipboard because ⌃⇧⌘4 puts a
+    screenshot there directly, which is the shortest path from "chart on
+    screen" to "chart parked".
+    """
+    from macro_positioning.chartlab import intake
+    from macro_positioning.chartlab import store as chartlab_store
+
+    source = (args.source or "clipboard").lower()
+    picked: list[tuple[Path, Path | None]] = []  # (image, inbox original)
+
+    if source == "clipboard":
+        got = intake.grab_clipboard()
+        if got is None:
+            print("Nothing image-shaped on the clipboard.", file=sys.stderr)
+            print(file=sys.stderr)
+            for line in intake.describe_sources():
+                print(f"  {line}", file=sys.stderr)
+            return 2
+        picked.append((got, None))
+
+    elif source == "screenshot":
+        got = intake.newest_screenshot()
+        if got is None:
+            print(
+                f"No image found in {intake.screenshot_dir()}.", file=sys.stderr
+            )
+            return 2
+        age = intake.age_minutes(got)
+        print(f"Newest screenshot: {got.name}  ({age:.0f} min old)")
+        if age > 10 and not args.yes:
+            # The newest file on the Desktop is not necessarily the chart
+            # just taken — confirm rather than park a stale one silently.
+            reply = input("That is not recent. Park it anyway? [y/N] ").strip().lower()
+            if reply not in {"y", "yes"}:
+                print("Nothing parked.")
+                return 0
+        picked.append((got, None))
+
+    elif source == "inbox":
+        images = intake.inbox_images()
+        if not images:
+            print(f"Inbox is empty: {intake.inbox_dir()}", file=sys.stderr)
+            print("Drag any chart image in there, then run this again.", file=sys.stderr)
+            return 2
+        if args.ticker and len(images) > 1:
+            print(
+                f"{len(images)} images in the inbox but one --ticker given. "
+                "Parking them all under that ticker; use one at a time if "
+                "they are different names.",
+            )
+        picked.extend((img, img) for img in images)
+
+    else:
+        path = Path(source).expanduser()
+        if not path.is_file():
+            print(f"Not a file: {path}", file=sys.stderr)
+            return 2
+        picked.append((path, None))
+
+    parked = 0
+    for image, from_inbox in picked:
+        try:
+            drop = chartlab_store.add_chart(
+                image,
+                ticker=args.ticker,
+                timeframe=args.timeframe,
+                note=args.note or "",
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"skipped {image.name}: {exc}", file=sys.stderr)
+            continue
+        parked += 1
+        if from_inbox is not None:
+            intake.mark_parked(from_inbox)
+        print(f"Parked {image.name}")
+        print(f"  document_id : {drop.document_id}")
+        print(f"  ticker      : {drop.ticker or '(undeclared)'}")
+
+    if not parked:
+        return 1
+    print()
+    print("Next: macro-positioning chart read --latest")
+    return 0
+
+
+def cmd_chart_list(args: argparse.Namespace) -> int:
+    """Recent desk chart drops."""
+    from macro_positioning.chartlab import store as chartlab_store
+
+    rows = chartlab_store.list_charts(limit=args.limit, ticker=args.ticker)
+    if not rows:
+        print("No chart-lab drops yet. Add one: macro-positioning chart add <image> --ticker T")
+        return 0
+    for row in rows:
+        read = "read" if row.get("extracted_features_json") else "PENDING"
+        caption = (row.get("raw_text") or "").replace("\n", " ")[:44]
+        print(
+            f"{row['document_id'][:12]}  {row['ingested_at'][:16]}  "
+            f"{read:<8}  {caption}"
+        )
+    return 0
+
+
+def cmd_chart_read(args: argparse.Namespace) -> int:
+    """Read a parked chart — in-session by default, `claude -p` with --auto.
+
+    Without --auto this prints the image path and the SECTION 10 skeleton
+    and stops. That is the zero-subprocess path: the operator's own
+    Claude Code session Reads the image, fills the JSON, and hands it to
+    `chart write`. With --auto the same read happens through the CLI
+    backend so it can run unattended. Neither path bills the API.
+    """
+    import json as _json
+
+    from macro_positioning.chartlab import store as chartlab_store
+
+    if args.latest:
+        doc = chartlab_store.latest_chart(args.ticker)
+        if doc is None:
+            print("No chart-lab drops found.", file=sys.stderr)
+            return 2
+        document_id = doc["document_id"]
+    elif args.doc:
+        document_id = args.doc
+        doc = chartlab_store.get_chart(document_id)
+        if doc is None:
+            print(f"No such document: {document_id}", file=sys.stderr)
+            return 2
+    else:
+        print("Provide --doc ID or --latest", file=sys.stderr)
+        return 2
+
+    if args.auto:
+        try:
+            result = chartlab_store.read_chart_auto(document_id, model=args.model)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            print(f"read failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Read {result.document_id} → {result.ticker or '(no ticker)'}")
+        print(f"  setups  : {result.setups}")
+        print(f"  signals : {len(result.signals)}")
+        if result.signal_error:
+            print(f"  signal extraction error: {result.signal_error}")
+        return 0
+
+    path = doc.get("attachment_path") or ""
+    abs_path = Path(path)
+    if not abs_path.is_absolute():
+        abs_path = Path(settings.base_dir) / path
+
+    print(f"document_id : {document_id}")
+    print(f"image       : {abs_path}")
+    caption = (doc.get("raw_text") or "").strip()
+    if caption:
+        print(f"caption     : {caption}")
+    print()
+    print("Read the image above, then fill this and pipe it back:")
+    print(f"  macro-positioning chart write --doc {document_id} --json -")
+    print()
+    print(_json.dumps(chartlab_store.SECTION_10_TEMPLATE, indent=2))
+    return 0
+
+
+def cmd_chart_write(args: argparse.Namespace) -> int:
+    """Attach a chart read to a drop and emit its signals."""
+    import json as _json
+
+    from macro_positioning.chartlab import store as chartlab_store
+
+    raw = sys.stdin.read() if args.json == "-" else Path(args.json).read_text()
+    try:
+        features = _json.loads(raw)
+    except ValueError as exc:
+        print(f"not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(features, dict):
+        print("extraction must be a JSON object", file=sys.stderr)
+        return 2
+
+    try:
+        result = chartlab_store.write_extraction(
+            args.doc, features, extract_signals=not args.no_signals
+        )
+    except (KeyError, TypeError) as exc:
+        print(f"write failed: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Wrote read for {result.document_id} → {result.ticker or '(no ticker)'}")
+    print(f"  setups  : {result.setups}")
+    print(f"  signals : {len(result.signals)}")
+    if result.signal_error:
+        print(f"  signal extraction error: {result.signal_error}")
+    if result.ticker:
+        print()
+        print(f"Next: macro-positioning chart bench {result.ticker}")
+    return 0
+
+
+def cmd_chart_bench(args: argparse.Namespace) -> int:
+    """The single-ticker setup card."""
+    import json as _json
+
+    from macro_positioning.chartlab.bench import build_bench
+
+    try:
+        card = build_bench(
+            args.ticker,
+            days=args.days,
+            fetch=not args.no_fetch,
+            side_override=args.side,
+        )
+    except ValueError as exc:
+        print(f"bench failed: {exc}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        from dataclasses import asdict
+
+        print(_json.dumps(asdict(card), indent=2, default=str))
+        return 0
+
+    f = _chart_fmt
+    print(f"{card.ticker}  ({card.resolved_symbol or '?'})")
+    print("─" * 58)
+    print(
+        f"price {f(card.close)}   ATR(14) {f(card.atr)}   bars {card.n_bars}"
+    )
+
+    if card.desk_read:
+        read = card.desk_read
+        stamp = (read.get("_ingested_at") or "")[:10]
+        print()
+        print(f"your chart read   {stamp}  [{read.get('timeframe') or '?'}]")
+        print(
+            f"  call_type {read.get('call_type') or '?'} · bias "
+            f"{read.get('bias') or '?'} · pattern {read.get('pattern') or '—'}"
+        )
+        if read.get("notes"):
+            print(f"  {read['notes']}")
+    else:
+        print()
+        print("your chart read   none on file for this ticker")
+
+    if card.supports or card.resistances:
+        print()
+        print("structure")
+        for lv in card.supports[:3]:
+            print(
+                f"  sup  {f(lv['low'])}–{f(lv['high'])}  "
+                f"{lv['touches']}x, {lv['last_touch_bars']}d ago"
+                f"{'  [flipped]' if lv['flipped'] else ''}"
+            )
+        for lv in card.resistances[:3]:
+            print(
+                f"  res  {f(lv['low'])}–{f(lv['high'])}  "
+                f"{lv['touches']}x, {lv['last_touch_bars']}d ago"
+            )
+
+    if card.levels:
+        lv = card.levels
+        print()
+        print(f"levels   [{lv.get('method')} · {lv.get('version')}]  side {card.side}")
+        print(f"  basis: {card.side_basis}")
+        print(
+            f"  entry {f(lv.get('entry'))}   stop {f(lv.get('stop'))}   "
+            f"target {f(lv.get('target'))}   RR {lv.get('rr'):.2f}"
+            if lv.get("rr") is not None
+            else f"  entry {f(lv.get('entry'))}   stop {f(lv.get('stop'))}"
+        )
+        for prov in (lv.get("provenance") or [])[:5]:
+            role = prov.get("role") or "?"
+            who = f"  [{prov['who']}]" if prov.get("who") else ""
+            print(f"    {role:<18}{f(prov.get('value'))}  {prov.get('basis') or ''}{who}")
+        for rej in (lv.get("rejected") or [])[:3]:
+            print(
+                f"    rejected {rej.get('role') or '?'} {f(rej.get('value'))}"
+                f"  ({rej.get('source') or '?'}): {rej.get('reason') or ''}"
+            )
+
+    if card.desk_levels:
+        dl = card.desk_levels
+        print()
+        rr = f"  R:R {dl['rr']:.2f}" if dl.get("rr") is not None else ""
+        print(f"your levels vs the agent{rr}")
+        print(f"  {'':<8}{'yours':>12}{'agent':>14}   gap")
+        for role in ("entry", "stop", "target"):
+            row = dl["rows"][role]
+            gap_r = row.get("gap_r")
+            gap = f"{gap_r:+.2f}R" if gap_r is not None else "—"
+            print(
+                f"  {role:<8}{f(row['desk']):>12}{f(row['agent']):>14}   {gap}"
+            )
+        if dl.get("invalidation"):
+            print(f"  invalidation: {dl['invalidation']}")
+        if dl.get("entry_reached") is False:
+            print("  entry not yet reached — price has not come to your level")
+
+    print()
+    if card.kol_n_signals:
+        print(f"trusted voices   {card.kol_n_signals} signals"
+              f"{f', {card.kol_played_out} played out' if card.kol_played_out else ''}")
+        for label, consensus in (
+            ("entry", card.kol_entry),
+            ("stop", card.kol_stop),
+            ("target", card.kol_target),
+        ):
+            if consensus:
+                mark = "✓" if consensus["trusted"] else "·"
+                drift = consensus.get("pct_from_spot")
+                # A level far from spot is one the market has left behind;
+                # say so on the row rather than leaving it to be inferred.
+                away = f"  ({drift:+.0f}% vs spot)" if drift is not None else ""
+                stale = "  ← price has left this behind" if drift is not None and abs(drift) > 15 else ""
+                print(
+                    f"  {mark} {label:<7}{f(consensus['price'])}{away}{stale}"
+                )
+                print(f"          {consensus['basis']}")
+    else:
+        print("trusted voices   no levels on file for this ticker")
+
+    if card.setup_type:
+        print()
+        print(f"setup type   {card.setup_type}")
+    if card.grade:
+        print(
+            f"grade        {card.grade}"
+            f"{f'  ({card.score:.0f}/100)' if card.score is not None else ''}"
+            f"{f'  ·  {card.timing}' if card.timing else ''}"
+        )
+        for row in card.components:
+            val = row.get("value")
+            mark = "  (stub)" if row.get("stub") else ""
+            print(
+                f"    {str(row['component']):<32}"
+                f"{(val if val is not None else 0):.2f} × {row['weight']:>2}{mark}"
+            )
+
+    if card.exits:
+        ex = card.exits
+        print()
+        print("exits")
+        for trim in ex["trims"]:
+            print(
+                f"  trim {int(trim['fraction'] * 100)}%  @ {f(trim['at'])}"
+                f"   {trim['basis']}"
+            )
+        print(f"  runner {int(ex['runner'] * 100)}%   stop {f(ex['stop'])}"
+              f"   → breakeven at {f(ex['move_stop_to_breakeven_at'])}")
+        if card.headroom_r is not None:
+            print(f"  headroom {card.headroom_r:.1f}R to target 2")
+
+    if card.warnings:
+        print()
+        for warn in card.warnings:
+            print(f"!  {warn}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="macro-positioning",
@@ -1085,6 +1493,78 @@ def build_parser() -> argparse.ArgumentParser:
     p_retag.add_argument("--add", action="append", default=None, help="repeatable: tag to add")
     p_retag.add_argument("--remove", action="append", default=None, help="repeatable: tag to remove")
     p_retag.set_defaults(func=cmd_sources_retag)
+
+    # ---- chart lab ----------------------------------------------------------
+    p_chart = sub.add_parser(
+        "chart",
+        help="chart lab: drop one chart, read it free, bench one ticker",
+    )
+    chart_sub = p_chart.add_subparsers(dest="chart_command", required=True)
+
+    p_cadd = chart_sub.add_parser("add", help="park a chart image awaiting a read")
+    p_cadd.add_argument("image", help="path to the chart image (png/jpg/webp)")
+    p_cadd.add_argument("--ticker", default=None, help="symbol on the chart (RIG, BTC)")
+    p_cadd.add_argument("--timeframe", default=None, help="chart timeframe (15m, 4h, 1D, 1W)")
+    p_cadd.add_argument("--note", default=None, help="one-line context for the read")
+    p_cadd.set_defaults(func=cmd_chart_add)
+
+    p_cgrab = chart_sub.add_parser(
+        "grab",
+        help="park a chart from the clipboard / newest screenshot / drop folder",
+    )
+    p_cgrab.add_argument(
+        "--from",
+        dest="source",
+        default="clipboard",
+        help=(
+            "clipboard (default) | screenshot | inbox | an explicit path. "
+            "⌃⇧⌘4 screenshots to the clipboard; ⇧⌘4 writes a file."
+        ),
+    )
+    p_cgrab.add_argument("--ticker", default=None, help="symbol on the chart (RIG, BTC)")
+    p_cgrab.add_argument("--timeframe", default=None, help="chart timeframe (15m, 4h, 1D, 1W)")
+    p_cgrab.add_argument("--note", default=None, help="one-line context for the read")
+    p_cgrab.add_argument("--yes", action="store_true", help="skip the stale-screenshot prompt")
+    p_cgrab.set_defaults(func=cmd_chart_grab)
+
+    p_clist = chart_sub.add_parser("list", help="recent chart-lab drops")
+    p_clist.add_argument("--ticker", default=None, help="filter to one symbol")
+    p_clist.add_argument("--limit", type=int, default=20, help="rows (default 20)")
+    p_clist.set_defaults(func=cmd_chart_list)
+
+    p_cread = chart_sub.add_parser(
+        "read",
+        help="read a parked chart (prints image + schema; --auto shells `claude -p`)",
+    )
+    g_read = p_cread.add_mutually_exclusive_group(required=True)
+    g_read.add_argument("--doc", default=None, help="document_id from `chart add`")
+    g_read.add_argument("--latest", action="store_true", help="most recent drop")
+    p_cread.add_argument("--ticker", default=None, help="with --latest: newest for this symbol")
+    p_cread.add_argument(
+        "--auto",
+        action="store_true",
+        help="read via the `claude -p` CLI backend instead of in-session (still free)",
+    )
+    p_cread.add_argument("--model", default=None, help="override vision model for --auto")
+    p_cread.set_defaults(func=cmd_chart_read)
+
+    p_cwrite = chart_sub.add_parser("write", help="attach a chart read + emit signals")
+    p_cwrite.add_argument("--doc", required=True, help="document_id from `chart add`")
+    p_cwrite.add_argument("--json", required=True, help="path to SECTION 10 JSON, or - for stdin")
+    p_cwrite.add_argument(
+        "--no-signals",
+        action="store_true",
+        help="persist the read but skip signal extraction",
+    )
+    p_cwrite.set_defaults(func=cmd_chart_write)
+
+    p_cbench = chart_sub.add_parser("bench", help="the single-ticker setup card")
+    p_cbench.add_argument("ticker", help="symbol to bench (RIG, BTC, URA)")
+    p_cbench.add_argument("--side", default=None, choices=["LONG", "SHORT"], help="force direction")
+    p_cbench.add_argument("--days", type=int, default=260, help="bar history (default 260)")
+    p_cbench.add_argument("--no-fetch", action="store_true", help="DB bars only, never hit yfinance")
+    p_cbench.add_argument("--json", action="store_true", help="emit the card as JSON")
+    p_cbench.set_defaults(func=cmd_chart_bench)
 
     # ---- prices -------------------------------------------------------------
     p_prices = sub.add_parser("prices", help="fetch + persist daily OHLCV bars")

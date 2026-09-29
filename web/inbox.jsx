@@ -1731,7 +1731,7 @@ function TrustedSourceThemes() {
                   {a.display_name}
                   {a.channel ? ` · ${a.channel}` : ""}
                   {"  —  "}
-                  {a.trust_weight.toFixed(1)}x trust · {a.n_with_vision}/{a.n_drops} analyzed
+                  {a.trust_weight.toFixed(1)}x trust · {a.n_with_vision}/{a.n_charts ?? a.n_drops} charts · {a.n_drops} drops
                 </option>
               ))}
             </select>
@@ -1955,7 +1955,7 @@ function TrustedAuthorDetail({ a, acc, windowDays }) {
           {a.category && <span className="ts-cat">{a.category.replace("_", " ")}</span>}
         </div>
         <div className="ts-detail-meta dim mono">
-          {a.n_with_vision}/{a.n_drops} analyzed
+          {a.n_with_vision}/{a.n_charts ?? a.n_drops} charts analyzed · {a.n_drops} drops
           {a.earliest_chart && a.latest_chart && (
             <span> · {a.earliest_chart} → {a.latest_chart}</span>
           )}

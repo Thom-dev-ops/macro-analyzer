@@ -9,12 +9,14 @@ from pydantic import BaseModel, Field
 
 from macro_positioning.core.models import PipelineRunRequest, PipelineRunResult, PositioningMemo, SourceOnboardingRequest, Thesis
 from macro_positioning.core.settings import settings
+from macro_positioning.api.chartlab_routes import router as chartlab_router
 from macro_positioning.api.funnel import router as funnel_router
 from macro_positioning.api.insiders_routes import router as insiders_router
 from macro_positioning.api.journal_routes import router as journal_router
 from macro_positioning.api.manual_input import router as manual_input_router
 from macro_positioning.api.paper_cohort_routes import router as paper_cohort_router
 from macro_positioning.api.paper_routes import router as paper_router
+from macro_positioning.api.paper_unlocked_routes import router as paper_unlocked_router
 from macro_positioning.api.stock_unlocked_routes import router as stock_unlocked_router
 from macro_positioning.api.rules_routes import router as rules_router
 from macro_positioning.api.signal_routes import router as signal_router
@@ -106,6 +108,7 @@ app.include_router(dashboard_router)
 app.include_router(integration_router)
 app.include_router(manual_input_router)
 app.include_router(funnel_router)
+app.include_router(chartlab_router)
 app.include_router(journal_router)
 app.include_router(rules_router)
 app.include_router(trade_plan_router)
@@ -113,6 +116,7 @@ app.include_router(insiders_router)
 app.include_router(signal_router)
 app.include_router(paper_router)
 app.include_router(paper_cohort_router)
+app.include_router(paper_unlocked_router)
 app.include_router(stock_unlocked_router)
 
 def _init_schema_resiliently(attempts: int = 3, wait_seconds: float = 5.0) -> None:

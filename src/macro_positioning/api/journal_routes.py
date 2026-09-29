@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from macro_positioning.core.settings import settings
+from macro_positioning.db.connect import write_connection
 from macro_positioning.journal import feedback_writer, repository, webhook
 
 
@@ -30,7 +31,7 @@ router = APIRouter(tags=["journal"])
 
 
 def _open_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(settings.sqlite_path)
+    conn = write_connection()
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
