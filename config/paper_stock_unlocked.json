@@ -1,0 +1,130 @@
+{
+  "$schema_version": "1.0",
+  "description": "Mandate for the STOCK UNLOCKED book — a third paper book that copy-trades the Stock Unlocked Trades channel. config/paper_trading.json runs the signal book (desk score, technical-agent levels, composed target); config/paper_cohort.json runs the Feather Hands copy book off chart-vision extractions. This one runs off the tracker ledger (`stock_unlocked_calls`): the channel states entry, targets and stop in words, so the levels the book trades are the desk's exactly, not a model's reading of a chart.",
+
+  "$why_separate": "Same engine, same exit rules, same fill model. What differs: the candidate source (paper/stock_unlocked_book.py reads the tracker, not the signals table), the stop-distance limits (the channel's stops are the channel's stops — a copy book that vetoes a 6% swing stop is not copying), and the horizon (their day trades resolve in hours, so the book ticks every two hours behind the tracker instead of twice a day).",
+
+  "scale": "rank_0_100",
+
+  "source": {
+    "label": "Stock Unlocked",
+    "lookback_days": 5,
+    "$lookback_comment": "A stated-level call is fresher than a chart call: the desk posts entry, then follow-ups within hours. Five days covers every swing still being followed up and leaves the timed-out day trades behind. The tracker's own verdict is the harder gate — a call whose stop has printed, or whose desk has posted 'stopped out' / the final target, is never a candidate whatever its age.",
+    "min_live_rr": 1.0,
+    "$rr_comment": "Reward:risk to the LAST stated target, re-measured at today's price. The channel's first target is usually under 1R (median planned 0.84R to T1) — the trade is the whole ladder, so the last target is the honest reward. Below 1R at the mark the book has missed it and says `rr_collapsed`.",
+    "max_candidates": 30,
+    "target": "last",
+    "$target_comment": "Which stated target becomes the engine's `target`: `last` (the full thesis) or `first`. The engine folds the target in as a ladder rung at its own R, and the rungs below take partials the way the desk scales out."
+  },
+
+  "rank_model": {
+    "$comment": "How a call becomes a 0-100 rank. An ordering, not a calibration. Every term lands on the decision row with its reason.",
+    "base": 55.0,
+    "$base_comment": "Above the cohort book's 50: every call here is explicitly a trade with three stated levels, which is the bar half the cohort's charts fail. A bare call clears the 60 entry floor with either a decent ladder or a fresh post — never both required.",
+    "rr_bonus_3r": 10.0,
+    "rr_bonus_2r": 5.0,
+    "rr_penalty_thin": -10.0,
+    "rr_thin_below": 1.0,
+    "$rr_comment": "On the R:R as drawn to the last target.",
+    "progress_bonus_per_target": 4.0,
+    "progress_max": 8.0,
+    "$progress_comment": "The desk has already posted 'Target 1 HIT' — the call is working by its author's own account. Small and capped: a call at T2 of four is also a call whose remaining reward is smaller, which `rr_live` already prices.",
+    "stale_after_days": 1.0,
+    "stale_per_day": -4.0,
+    "stale_floor": -16.0,
+    "$stale_comment": "Twice the cohort book's decay: these are day-to-short-swing calls and a three-day-old one is usually over. Bottoms out deep enough to push a five-day-old call under the entry bar on its own.",
+    "day_trade_penalty": -6.0,
+    "$day_trade_comment": "Day trades on this channel resolve in a median of a few hours against a two-hour tick — the book will usually fill after T1 has printed and the stop has been moved. Down-weighted, not excluded: the tape says they are the channel's best slice (5/8), and the book should find out whether it can capture any of that.",
+    "edge_max_points": 8.0,
+    "edge_min_sample": 10,
+    "edge_r_cap": 0.75,
+    "$edge_comment": "Tilt by the tracker's own measured expectancy on this call's slice (stock vs crypto × day vs swing): avg realised R over at least ten resolved calls, capped at ±0.75R → ±8 rank points. Stock swings at +0.65R lean in; crypto at −0.06R is flat. Self-referential by design — this book exists to test whether the tracker's numbers are worth money."
+  },
+
+  "book": {
+    "starting_equity_usd": 50000.0,
+    "base_currency": "USD"
+  },
+
+  "sizing": {
+    "min_position_pct": 0.015,
+    "max_position_pct": 0.05,
+    "min_ticket_usd": 250.0,
+    "add_threshold_pct": 0.0075,
+    "min_stop_pct": 0.005,
+    "max_stop_pct": 0.12,
+    "$stop_comment": "The signal book caps stops at 5% because it chooses its own. This book copies someone else's: ZEC's short ran a 0.9% stop, ASAN's swing a 6.1% one, ARB's 11.2%. Vetoing either would be measuring a different desk. The bounds here only catch a parse error."
+  },
+
+  "cash": {
+    "min_cash_pct": 0.25,
+    "rebalance_tolerance_pct": 0.005
+  },
+
+  "rank": {
+    "entry_floor": 60,
+    "exit_floor": 40,
+    "rotation_edge": 15
+  },
+
+  "concentration": {
+    "max_positions": 12,
+    "max_bucket_pct": 0.55,
+    "max_positions_per_bucket": 6,
+    "$comment": "Half the channel's flow is crypto alts; the signal book's 20% / 3-per-bucket would stop it trading after three names. Same reasoning as the cohort book."
+  },
+
+  "exits": {
+    "trim_at_target_pct": 0.5,
+    "paths": {
+      "target":  { "min_rank": 101, "min_support": 101 },
+      "$target_path_comment": "Switched off (unreachable thresholds). Every position takes the LADDER, which is how the desk trades: partials at each target, stop ratcheted behind.",
+      "ladder":  { "rungs": [ { "at_r": 0.75, "take": 0.25, "stop_to": "breakeven" },
+                              { "at_r": 1.5,  "take": 0.25, "stop_to": "lock_1r" },
+                              { "at_r": 2.5,  "take": 0.25, "stop_to": "lock_2r" } ] },
+      "$ladder_comment": "Rungs sit lower than the signal book's 1/2/3R because the channel's targets do: T1 is typically 0.6–0.9R, the last target 2–4R. The engine adds the stated last target as a rung of its own if it falls between. The final quarter trails.",
+      "trail":   { "giveback_by_r": [ { "at_r": 0.75, "giveback": 0.50 },
+                                      { "at_r": 1.5,  "giveback": 0.35 },
+                                      { "at_r": 2.5,  "giveback": 0.25 } ] }
+    },
+    "trail_atr_mult": 0.0,
+    "trail_giveback_pct": 0.50,
+    "trail_arms_at_r": 0.75,
+    "min_hold_days": 0.25,
+    "$min_hold_comment": "Six hours. The channel closes day trades inside a session; a one-day minimum would make the book ignore its own source's exits. The stop and the ladder act on any tick regardless.",
+    "thesis_exit_confirm_ticks": 2,
+    "stale_after_days": 6,
+    "$stale_comment": "A swing the desk has not mentioned in six days is one the desk has moved past. Most of this channel's calls ARE explicitly closed ('stopped out', 'all targets HIT'), and those close the position through the rank (the candidate source ranks a desk-closed call at 0) well before this fires.",
+    "reentry_cooldown_days": 1,
+    "reentry_reclaim_buffer_pct": 0.002,
+    "max_stops_per_window": 2
+  },
+
+  "horizon": {
+    "fallback_days": 3,
+    "min_hold_fraction": 0.25,
+    "min_hold_bounds": [0.25, 5],
+    "confirm_ticks_bounds": [1, 3],
+    "$comment": "Day trades fall through to the 3-day fallback; swings carry `dominant_horizon: swing` (10d). Minimum hold is a quarter of that, bounded 6h–5d, and thesis exits need 1–3 consecutive two-hour ticks. Stops, rungs and the trail never wait."
+  },
+
+  "composition": {
+    "use_composed_levels": false,
+    "min_target_support": 0.0,
+    "exit_target_support": 0.0,
+    "$comment": "Off, same as the cohort book. The book takes the call as posted."
+  },
+
+  "execution": {
+    "slippage_bps": 15,
+    "fee_bps": 0,
+    "$comment": "Cohort-book slippage: small caps (DUOT, IPST, CYPH) and alts off a Telegram post."
+  },
+
+  "learning": {
+    "shrink_n": 30,
+    "min_n": 30,
+    "window_days": 90,
+    "rank_cap": 10
+  }
+}

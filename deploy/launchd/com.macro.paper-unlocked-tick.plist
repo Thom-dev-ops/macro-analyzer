@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.macro.paper-unlocked-tick</string>
+
+    <!-- Venv python directly (Full Disk Access), same as the other ticks. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/thom/Documents/Personal/Code Projects/Macro Analyzer/.venv/bin/python</string>
+        <string>scripts/paper_unlocked_tick.py</string>
+        <string>--execute</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/thom/Documents/Personal/Code Projects/Macro Analyzer</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/thom/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Every two hours, same cadence as the tracker tick it reads from.
+         (launchd cannot offset two StartInterval jobs; the book screens
+         on a live quote either way, so a tick before the tracker's pass
+         only means a desk-closed call is followed one tick later.) -->
+    <key>StartInterval</key>
+    <integer>7200</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- The tick prints its full decision set — the audit trail. -->
+    <key>StandardOutPath</key>
+    <string>/Users/thom/Library/Logs/macro-paper-unlocked-tick.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/thom/Library/Logs/macro-paper-unlocked-tick.err.log</string>
+</dict>
+</plist>

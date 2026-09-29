@@ -1162,7 +1162,10 @@ SCHEMA_STATEMENTS = [
         desk_max_target    INTEGER NOT NULL DEFAULT 0,
         first_scored_at    TEXT,
         last_scored_at     TEXT,
-        score_error        TEXT
+        score_error        TEXT,
+        author             TEXT,               -- the alerter, where the post names one
+        trigger            TEXT,               -- above | below: a breakout alert armed at entry
+        fmt                TEXT                -- v1 (2025 bot template) | v2 (current)
     )
     """,
     """
@@ -1182,6 +1185,9 @@ SCHEMA_STATEMENTS = [
 # drop/recreate. New DBs get them from the CREATE TABLE statements above
 # AND from the ALTER pass (which is a no-op on those because they exist).
 _ADDED_COLUMNS: list[tuple[str, str, str]] = [
+    ("stock_unlocked_calls", "author", "TEXT"),
+    ("stock_unlocked_calls", "trigger", "TEXT"),
+    ("stock_unlocked_calls", "fmt", "TEXT"),
     ("agent_call_log", "call_type", "TEXT"),
     ("agent_call_log", "quality_score", "REAL"),
     ("agent_call_log", "model_version", "TEXT"),
