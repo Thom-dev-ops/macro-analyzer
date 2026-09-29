@@ -734,6 +734,7 @@ def run_scoring_pass(
                             conn, entry.ticker,
                             atr=feats.get("atr14"),
                             weights=pass_author_weights,
+                            close=feats.get("close"),
                         )
                     except Exception:
                         ticker_kol = None

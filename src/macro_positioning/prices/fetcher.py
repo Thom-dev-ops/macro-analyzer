@@ -18,6 +18,7 @@ from typing import Iterable
 from pydantic import BaseModel, Field
 
 from macro_positioning.core.settings import settings
+from macro_positioning.db.connect import write_connection
 from macro_positioning.db.schema import initialize_database
 from macro_positioning.prices.provider import PriceBar, PriceProvider, default_provider
 
@@ -60,17 +61,36 @@ def fetch_and_persist(
     bars_persisted = 0
     tickers_with_data = 0
 
-    with sqlite3.connect(settings.sqlite_path) as conn:
-        for ticker in tickers_list:
-            try:
-                bars = p.fetch_history(ticker, days=days, timeframe=timeframe)
-            except Exception as exc:
-                failures.append({"ticker": ticker, "error": f"{type(exc).__name__}: {exc}"})
-                continue
-            if not bars:
-                failures.append({"ticker": ticker, "error": "no data returned"})
-                continue
-            tickers_with_data += 1
+    # Fetch everything FIRST, then write in one short transaction.
+    #
+    # This used to be a single `with sqlite3.connect(...)` wrapped around
+    # the whole loop, so the write transaction opened on the first ticker's
+    # bars and stayed open across every remaining network call — roughly a
+    # hundred yfinance round-trips. The hourly alert-watch job therefore
+    # held the SQLite writer for 40+ seconds at a stretch, and everything
+    # else that wanted to write during that window failed with `database is
+    # locked`: the paper tick, the API's boot-time schema init, and every
+    # attempt to mark or promote a concept from the SPA, which surfaced to
+    # the user as a 500 from a button that should always work.
+    #
+    # ~100 tickers x 200 bars is a few thousand rows in memory. That is a
+    # trivial price for a lock held in milliseconds instead of minutes.
+    fetched: list[tuple[str, list]] = []
+    for ticker in tickers_list:
+        try:
+            bars = p.fetch_history(ticker, days=days, timeframe=timeframe)
+        except Exception as exc:
+            failures.append({"ticker": ticker, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        if not bars:
+            failures.append({"ticker": ticker, "error": "no data returned"})
+            continue
+        tickers_with_data += 1
+        fetched.append((ticker, bars))
+
+    # Network is done; now take the writer.
+    with write_connection() as conn:
+        for ticker, bars in fetched:
             try:
                 _persist_bars(conn, bars)
                 bars_persisted += len(bars)

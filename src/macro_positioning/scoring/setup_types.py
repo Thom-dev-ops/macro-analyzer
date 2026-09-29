@@ -19,6 +19,21 @@ Honesty rules, because this feeds a score:
   That is ``watchlist_building`` — preferred under transitional chop and
   nowhere else, which is the correct read: nothing to enter yet. We do
   not dress a placeholder up as a regime-preferred setup.
+- This classifier names the ENTRY. ``LevelSet.structural`` does not: it
+  goes True as soon as a structure zone produces the *stop*, which v2
+  does even when the entry is a mechanical rail at spot
+  (``mechanical_v0+structure``). A structural stop is not a structural
+  entry, so a mechanical rail stays ``watchlist_building`` however good
+  its stop is — the honest read is "a level to watch, not a trigger to
+  take". Call `has_structural_entry` when the flag and the name have to
+  agree in the same sentence.
+- v2 records how the rails were *fused* by appending suffixes to the
+  detector name (``pullback_support+structure+voices``, levels.py). Those
+  suffixes say nothing about what was detected, so every match here is
+  made on the base detector — `base_detector` strips them. Matching the
+  composite string instead dropped every v2 row to ``watchlist_building``
+  and switched this component back off, which is the bug this paragraph
+  exists to stop recurring.
 - Short-side structure maps to the risk-off vocabulary even in a bullish
   regime. A breakdown is a breakdown.
 - The specialised commodity names (uranium, precious metals, miners) are
@@ -66,6 +81,36 @@ _MINERS = {
 # Relative-strength margin (20d, vs benchmark) that counts as leadership.
 _RS_LEAD_MARGIN = 0.02
 
+# Detectors that constitute a real ENTRY pattern. Anything else — the
+# mechanical rails (`mechanical_v0`), a watchlist placeholder, a name we
+# have never seen — is a level to watch, not a trigger to take.
+_ENTRY_DETECTORS = frozenset({
+    "breakout_20d",
+    "pullback_support",
+    "breakdown_20d",
+    "rally_resistance",
+})
+
+
+def base_detector(method: str | None) -> str:
+    """The detector name with v2's fusion suffixes stripped.
+
+    ``pullback_support+structure+voices`` → ``pullback_support``. The
+    suffixes record which rails structure and trusted voices contributed;
+    what was *detected* is the part before the first ``+``.
+    """
+    return (method or "").split("+", 1)[0]
+
+
+def has_structural_entry(method: str | None, structural: bool) -> bool:
+    """True when a structure detector produced the ENTRY, not merely the
+    stop. This is the question `faithful_names` actually asks, and the one
+    a caller should ask before pairing `LevelSet.structural` with a setup
+    name — the flag alone is True for a mechanical entry with a structural
+    stop, and the name for that is ``watchlist_building``.
+    """
+    return bool(structural) and base_detector(method) in _ENTRY_DETECTORS
+
 
 def _has(themes: list[str] | None, key: str) -> bool:
     return key in (themes or [])
@@ -105,22 +150,27 @@ def faithful_names(
     ticker = (ticker or "").upper()
     asset_class = (asset_class or "equity").lower()
     themes = themes or []
+    # v2 fuses rails and records it in the name; match on what was detected.
+    base = base_detector(method)
 
     # Cash and bonds are not setups; holding them IS the position.
     if asset_class in {"cash_equivalent", "bond"}:
         return ["cash_preservation"]
 
-    # No structure found → nothing to enter. Mechanical rails are a
-    # placeholder, and must not borrow a regime-preferred name.
-    if not method or not structural:
+    # No entry pattern fired → nothing to enter. This covers missing
+    # levels, mechanical rails (with or without a structural stop) and
+    # any detector this vocabulary does not know. It has to come before
+    # the side branch: a SHORT sitting on a mechanical rail has no
+    # breakdown to name, and `failed_breakout_short` would claim one.
+    if not has_structural_entry(method, structural):
         return ["watchlist_building"]
 
     # Short-side structure keeps the risk-off vocabulary regardless of
     # the prevailing regime.
-    if side == "SHORT" or method in {"breakdown_20d", "rally_resistance"}:
+    if side == "SHORT" or base in {"breakdown_20d", "rally_resistance"}:
         return ["failed_breakout_short"]
 
-    if method == "breakout_20d":
+    if base == "breakout_20d":
         # No chop-vocabulary synonym exists for a breakout, by design.
         if _has(themes, _URANIUM):
             return ["uranium_accumulation", "commodity_breakout", "breakout_continuation"]
@@ -132,7 +182,7 @@ def faithful_names(
             return ["commodity_breakout", "breakout_continuation"]
         return ["breakout_continuation"]
 
-    if method == "pullback_support":
+    if base == "pullback_support":
         # Every pullback to a defended level is also a support retest —
         # that synonym is what lets a real setup score in chop.
         tail = ["pullback_to_support", "support_retest"]
@@ -150,7 +200,9 @@ def faithful_names(
             return ["relative_strength_continuation", *tail]
         return tail
 
-    # Unknown detector — honest fallback rather than a guessed match.
+    # Unreachable while `_ENTRY_DETECTORS` and the branches above stay in
+    # step; kept so adding a detector to the set without a branch degrades
+    # to the honest answer instead of raising.
     return ["watchlist_building"]
 
 

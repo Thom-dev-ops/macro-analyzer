@@ -1,0 +1,66 @@
+//@version=5
+indicator("Custom MACD Histogram with TTM Squeeze", overlay=false)
+
+//======================
+// MACD Calculation
+//======================
+
+// MACD Inputs
+fastLength   = input.int(14, title="Fast Length", minval=1)
+slowLength   = input.int(26, title="Slow Length", minval=1)
+signalLength = input.int(9,  title="Signal Length", minval=1)
+src          = input(close, title="Source")
+
+// Calculate MACD values using built-in function
+[macdLine, signalLine, hist] = ta.macd(src, fastLength, slowLength, signalLength)
+
+// Determine histogram color based on its change from the previous bar:
+// - For positive histogram bars:
+//   • If increasing (hist > hist[1]) use a brighter green (lime)
+//   • Otherwise use a darker green
+// - For negative histogram bars:
+//   • If decreasing further (hist < hist[1]) use a darker red
+//   • Otherwise (recovering) use a lighter red (with transparency)
+histColor = hist >= 0 ? (hist > hist[1] ? color.lime : color.green) 
+                      : (hist < hist[1] ? color.red : color.new(color.red, 50))
+
+// Plot MACD and Signal lines
+plot(macdLine, color=color.blue, title="MACD Line")
+plot(signalLine, color=color.orange, title="Signal Line")
+// Plot the MACD histogram
+plot(hist, color=histColor, style=plot.style_histogram, title="Histogram")
+
+//======================
+// TTM Squeeze Calculation
+//======================
+
+// TTM Squeeze Inputs
+squeezeLength = input.int(20, title="Squeeze Length", minval=1)
+bbMult        = input.float(2.0, title="BB Multiplier", step=0.1)
+kcMult        = input.float(1.5, title="KC Multiplier", step=0.1)
+
+// Bollinger Bands Calculation
+basis   = ta.sma(close, squeezeLength)
+std     = ta.stdev(close, squeezeLength)
+bbUpper = basis + bbMult * std
+bbLower = basis - bbMult * std
+
+// Keltner Channels Calculation
+emaVal   = ta.ema(close, squeezeLength)
+rangeKC  = ta.ema(ta.tr, squeezeLength)
+kcUpper  = emaVal + kcMult * rangeKC
+kcLower  = emaVal - kcMult * rangeKC
+
+// Determine if TTM Squeeze is on: 
+// The squeeze is on if the Bollinger Bands are completely inside the Keltner Channels.
+squeezeOn = (bbLower > kcLower) and (bbUpper < kcUpper)
+
+//======================
+// TTM Squeeze Overlay
+//======================
+
+// Option 1: Change the background color of the indicator pane when a squeeze is on.
+bgcolor(squeezeOn ? color.new(color.red, 80) : na, title="TTM Squeeze Background")
+
+// Option 2: Plot a discrete column indicator (0 or 1) to show the squeeze status.
+plot(squeezeOn ? 1 : 0, title="TTM Squeeze", style=plot.style_columns, color=squeezeOn ? color.red : color.green, transp=60)

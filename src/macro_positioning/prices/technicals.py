@@ -10,6 +10,9 @@ Indicators:
     trend-following indicator for active traders
   - Average true range (ATR) over 14 bars
   - Relative strength index (RSI) over 14 bars
+  - MACD(14,26,9) with the 4-state histogram colour read, and the TTM
+    Squeeze (BB inside KC) — both ported 1:1 from his own Pine indicator
+    (docs/indicators/macd_ttm_squeeze.pine) so the numbers match his chart
   - Multi-horizon price momentum: 1d / 3d / 5d / 20d / 60d % change
     (approximates daily / 3-day / weekly / monthly / cycle trend)
   - % distance from MA
@@ -107,6 +110,12 @@ def atr(bars: list[PriceBar], window: int = 14) -> float | None:
 # RSI
 # ---------------------------------------------------------------------------
 
+# RSI is read against its own signal MA (his TradingView setup: "RSI 14
+# close with a 14-period signal MA"), not against the 30/70 bands.
+RSI_WINDOW, RSI_SIGNAL = 14, 14
+RSI_EXTENDED, RSI_WASHED_OUT = 80.0, 20.0
+
+
 def rsi(closes: list[float], window: int = 14) -> float | None:
     """Relative strength index. Wilder smoothing approximation via SMA."""
     if len(closes) < window + 1:
@@ -120,6 +129,316 @@ def rsi(closes: list[float], window: int = 14) -> float | None:
         return 100.0
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
+
+
+def rsi_series(closes: list[float], window: int = 14) -> list[float]:
+    """RSI at every bar it can be computed for, oldest first.
+
+    Same math as `rsi()` (whose value this series ends on), so the two can
+    never disagree. One value per bar from index `window` onward.
+    """
+    if window <= 0 or len(closes) < window + 1:
+        return []
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    out: list[float] = []
+    for end in range(window, len(deltas) + 1):
+        chunk = deltas[end - window : end]
+        avg_gain = sum(max(d, 0) for d in chunk) / window
+        avg_loss = sum(max(-d, 0) for d in chunk) / window
+        if avg_loss == 0:
+            out.append(100.0)
+        else:
+            rs = avg_gain / avg_loss
+            out.append(100 - (100 / (1 + rs)))
+    return out
+
+
+def rsi_with_signal(
+    closes: list[float],
+    window: int = RSI_WINDOW,
+    signal: int = RSI_SIGNAL,
+) -> dict | None:
+    """RSI(14) plus its 14-period signal MA — how he actually reads RSI.
+
+    The read that matters is RSI versus its own MA, NOT the 30/70 bands:
+    "RSI below its MA" means momentum has ceased, whatever the absolute
+    level. `above_signal` is that read; `extended` / `washed_out` are only
+    secondary guards.
+
+    His condition is strictly *below*, so equality is NOT momentum ceasing —
+    and that matters: a relentless run with no down closes pins RSI at 100
+    and drags its own MA up to meet it, which a `>` test would read as
+    momentum ceasing at the exact moment it is strongest.
+
+    None until there are enough bars for the signal MA to exist.
+    """
+    series = rsi_series(closes, window)
+    if len(series) < signal:
+        return None
+    ma = sum(series[-signal:]) / signal
+    val = series[-1]
+    prev = series[-2] if len(series) > 1 else val
+    return {
+        "rsi": val,
+        "rsi_signal": ma,
+        "above_signal": val >= ma,
+        "rising": val > prev,
+        "extended": val > RSI_EXTENDED,
+        "washed_out": val < RSI_WASHED_OUT,
+    }
+
+
+# ---------------------------------------------------------------------------
+# MACD + TTM Squeeze — the desk's own TradingView pane
+#
+# Ported 1:1 from the Pine v5 indicator "Custom MACD Histogram with TTM
+# Squeeze" (source kept verbatim at docs/indicators/macd_ttm_squeeze.pine)
+# so the system reads the SAME numbers he reads on the chart. Deliberate
+# fidelity choices — do NOT "fix" these to textbook defaults:
+#   - fast length is 14, not the textbook 12
+#   - `hist_state` reproduces the four histogram colours he actually reads
+#     (lime / green / red / faded-red), which carry the momentum read
+#   - squeeze stdev is POPULATION stdev (Pine's ta.stdev), not sample
+#   - the Keltner range is an EMA of TRUE RANGE (Pine's ta.tr), not of
+#     high-low; the first bar's TR is high-low, as in Pine
+# ---------------------------------------------------------------------------
+
+MACD_FAST, MACD_SLOW, MACD_SIGNAL = 14, 26, 9
+SQUEEZE_LENGTH, SQUEEZE_BB_MULT, SQUEEZE_KC_MULT = 20, 2.0, 1.5
+
+# The four histogram colours, in the desk's own terms.
+HIST_STATES = ("rising_positive", "fading_positive", "falling_negative", "recovering_negative")
+
+
+def ema_series(values: list[float], window: int) -> list[float]:
+    """Full EMA series, seeded the same way as `ema()` (SMA of first window).
+
+    One value per bar from index `window - 1` onward, so
+    len(result) == len(values) - window + 1. Empty list when too few bars.
+    `ema()` returns this series' last element.
+    """
+    if window <= 0 or len(values) < window:
+        return []
+    alpha = 2.0 / (window + 1)
+    val = sum(values[:window]) / window
+    out = [val]
+    for v in values[window:]:
+        val = alpha * v + (1 - alpha) * val
+        out.append(val)
+    return out
+
+
+def macd(
+    closes: list[float],
+    fast: int = MACD_FAST,
+    slow: int = MACD_SLOW,
+    signal: int = MACD_SIGNAL,
+) -> dict | None:
+    """MACD line / signal / histogram, with the histogram colour state.
+
+    None when there aren't enough bars for the signal EMA to exist
+    (needs slow + signal - 1 bars). `hist_state` is the read that matters:
+    a shrinking positive bar ("fading_positive") is momentum rolling over
+    even while the histogram is still above zero.
+    """
+    fast_s = ema_series(closes, fast)
+    slow_s = ema_series(closes, slow)
+    if not fast_s or not slow_s:
+        return None
+    # Align both series on the slow EMA's first bar (index slow - 1).
+    offset = slow - fast
+    if offset < 0 or len(fast_s) <= offset:
+        return None
+    macd_s = [fast_s[offset + i] - slow_s[i] for i in range(len(slow_s))]
+    signal_s = ema_series(macd_s, signal)
+    if len(signal_s) < 2:
+        return None
+    # signal_s[i] lines up with macd_s[signal - 1 + i]
+    hist_s = [macd_s[signal - 1 + i] - signal_s[i] for i in range(len(signal_s))]
+
+    hist_now, hist_prev = hist_s[-1], hist_s[-2]
+    if hist_now >= 0:
+        state = "rising_positive" if hist_now > hist_prev else "fading_positive"
+    else:
+        state = "falling_negative" if hist_now < hist_prev else "recovering_negative"
+
+    cross = None
+    if hist_prev <= 0 < hist_now:
+        cross = "bull_cross"
+    elif hist_prev >= 0 > hist_now:
+        cross = "bear_cross"
+
+    return {
+        "macd": macd_s[-1],
+        "signal": signal_s[-1],
+        "hist": hist_now,
+        "hist_prev": hist_prev,
+        "hist_state": state,
+        "above_signal": macd_s[-1] > signal_s[-1],
+        "cross": cross,
+    }
+
+
+def _stdev_pop(values: list[float]) -> float:
+    """Population standard deviation — matches Pine's ta.stdev."""
+    n = len(values)
+    mean = sum(values) / n
+    return (sum((v - mean) ** 2 for v in values) / n) ** 0.5
+
+
+def true_range_series(bars: list[PriceBar]) -> list[float]:
+    """One true range per bar. First bar is high-low (Pine's ta.tr)."""
+    out: list[float] = []
+    for i, b in enumerate(bars):
+        h = b.high if b.high is not None else b.close
+        l = b.low if b.low is not None else b.close
+        if i == 0:
+            out.append(h - l)
+            continue
+        pc = bars[i - 1].close
+        out.append(max(h - l, abs(h - pc), abs(l - pc)))
+    return out
+
+
+def ttm_squeeze(
+    bars: list[PriceBar],
+    length: int = SQUEEZE_LENGTH,
+    bb_mult: float = SQUEEZE_BB_MULT,
+    kc_mult: float = SQUEEZE_KC_MULT,
+) -> dict | None:
+    """TTM Squeeze: are the Bollinger Bands inside the Keltner Channels?
+
+    Squeeze on = volatility compressed = energy stored. Returns the bands
+    themselves plus two reads the Pine plot leaves to the eye: how many
+    consecutive bars the squeeze has held (`bars_in_squeeze`) and whether
+    it released on this bar (`fired`) — the release is the tradeable event.
+    None when fewer than `length` bars.
+    """
+    if length <= 0 or len(bars) < length:
+        return None
+    closes = [b.close for b in bars]
+    trs = true_range_series(bars)
+
+    ema_close_s = ema_series(closes, length)
+    ema_tr_s = ema_series(trs, length)
+    if not ema_close_s or not ema_tr_s:
+        return None
+
+    on_s: list[bool] = []
+    bb_up = bb_lo = kc_up = kc_lo = 0.0
+    # Index i of each series lines up with bar index `length - 1 + i`.
+    for i in range(len(ema_close_s)):
+        window = closes[i : i + length]
+        basis = sum(window) / length
+        std = _stdev_pop(window)
+        bb_up = basis + bb_mult * std
+        bb_lo = basis - bb_mult * std
+        kc_up = ema_close_s[i] + kc_mult * ema_tr_s[i]
+        kc_lo = ema_close_s[i] - kc_mult * ema_tr_s[i]
+        on_s.append(bb_lo > kc_lo and bb_up < kc_up)
+
+    on = on_s[-1]
+    bars_in_squeeze = 0
+    if on:
+        for v in reversed(on_s):
+            if not v:
+                break
+            bars_in_squeeze += 1
+    fired = (not on) and len(on_s) >= 2 and on_s[-2]
+
+    return {
+        "on": on,
+        "bars_in_squeeze": bars_in_squeeze,
+        "fired": fired,
+        "bb_upper": bb_up,
+        "bb_lower": bb_lo,
+        "kc_upper": kc_up,
+        "kc_lower": kc_lo,
+    }
+
+
+# ---------------------------------------------------------------------------
+# The pane as one read — and the same pane across timeframes
+# ---------------------------------------------------------------------------
+
+# His chart timeframes are 12h / 1D / 3D and he checks them for conflict.
+# 12h needs intraday bars the DB doesn't hold yet (prices/provider.py TODO),
+# so the derivable pair is the default; 1W/1M are available on request.
+PANE_TIMEFRAMES = ("1D", "3D")
+
+
+def indicator_pane(bars: list[PriceBar], timeframe: str = "1D") -> dict:
+    """MACD + Squeeze + RSI as a single read, the way the pane is read.
+
+    RSI rides along because the confluence rubric's Indicator subscore is
+    "MACD + RSI + Squeeze all agree" — one call returns all three so no
+    caller has to remember the third.
+
+    `summary` is a one-line human read for notes/journal/UI. Sub-dicts are
+    None when history is too short; callers must handle that rather than
+    assume a reading exists.
+    """
+    closes = [b.close for b in bars]
+    m = macd(closes)
+    s = ttm_squeeze(bars)
+    r = rsi(closes, RSI_WINDOW)
+    rs = rsi_with_signal(closes)
+
+    parts: list[str] = []
+    if m:
+        parts.append(m["hist_state"].replace("_", " "))
+        parts.append("macd>signal" if m["above_signal"] else "macd<signal")
+        if m["cross"]:
+            parts.append(m["cross"].replace("_", " ").upper())
+    if s:
+        if s["fired"]:
+            parts.append("SQUEEZE FIRED")
+        elif s["on"]:
+            parts.append(f"squeeze on ({s['bars_in_squeeze']} bars)")
+        else:
+            parts.append("squeeze off")
+    if rs:
+        parts.append(
+            f"rsi {rs['rsi']:.0f} {'>' if rs['above_signal'] else '<'} ma {rs['rsi_signal']:.0f}"
+            + (" EXTENDED" if rs["extended"] else "")
+        )
+    elif r is not None:
+        parts.append(f"rsi {r:.0f}")
+
+    return {
+        "timeframe": timeframe,
+        "n_bars": len(bars),
+        "macd": m,
+        "squeeze": s,
+        "rsi14": r,
+        "rsi": rs,
+        "summary": ", ".join(parts) if parts else f"insufficient history ({len(bars)} bars)",
+    }
+
+
+def indicator_pane_mtf(
+    daily_bars: list[PriceBar],
+    timeframes: tuple[str, ...] = PANE_TIMEFRAMES,
+) -> dict[str, dict]:
+    """The pane on each timeframe, aggregated up from daily bars.
+
+    Weekly/monthly are exact aggregations of the daily history (see
+    `prices/resample.py`), so no extra fetch is needed. Intraday timeframes
+    are NOT derivable this way — they need intraday bars in the DB first
+    (`prices/provider.py` TODO). Asking for one raises rather than silently
+    handing back a daily read dressed up as 4h.
+    """
+    from macro_positioning.prices.resample import SUPPORTED, resample_bars
+
+    out: dict[str, dict] = {}
+    for tf in timeframes:
+        if tf not in SUPPORTED:
+            raise ValueError(
+                f"timeframe {tf!r} can't be aggregated from daily bars; "
+                f"derivable: {SUPPORTED}"
+            )
+        out[tf] = indicator_pane(resample_bars(daily_bars, tf), timeframe=tf)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +558,10 @@ def compute_technical_features(bars: list[PriceBar]) -> dict:
       atr14, rsi14, higher_highs, higher_lows, lower_highs, lower_lows,
       above_ma50, above_ma200, recent_breakout, recent_breakdown,
       prior_high_20, prior_low_20, swing_low_10, swing_high_10,
+      macd, macd_signal, macd_hist, macd_hist_state, macd_above_signal,
+      macd_cross, rsi14_signal, rsi14_above_signal,
+      squeeze_on, squeeze_bars, squeeze_fired,
+      bb_upper, bb_lower, kc_upper, kc_lower,
       n_bars
     """
     if not bars:
@@ -255,6 +578,10 @@ def compute_technical_features(bars: list[PriceBar]) -> dict:
     ema20_v = ema(closes, 20)
     ema50_v = ema(closes, 50)
     ema200_v = ema(closes, 200)
+
+    macd_v = macd(closes) or {}
+    sqz_v = ttm_squeeze(bars) or {}
+    rsi_v = rsi_with_signal(closes) or {}
 
     return {
         "n_bars": len(bars),
@@ -300,4 +627,21 @@ def compute_technical_features(bars: list[PriceBar]) -> dict:
         "prior_low_20": prior_extreme(lows, 20, high=False),
         "swing_low_10": swing_low(lows, 10),
         "swing_high_10": swing_high(highs, 10),
+        # The desk's own MACD(14,26,9) + TTM Squeeze pane — same numbers he
+        # reads on TradingView. None when there aren't enough bars.
+        "macd": macd_v.get("macd"),
+        "macd_signal": macd_v.get("signal"),
+        "macd_hist": macd_v.get("hist"),
+        "macd_hist_state": macd_v.get("hist_state"),
+        "macd_above_signal": macd_v.get("above_signal"),
+        "macd_cross": macd_v.get("cross"),
+        "rsi14_signal": rsi_v.get("rsi_signal"),
+        "rsi14_above_signal": rsi_v.get("above_signal"),
+        "squeeze_on": sqz_v.get("on"),
+        "squeeze_bars": sqz_v.get("bars_in_squeeze"),
+        "squeeze_fired": sqz_v.get("fired"),
+        "bb_upper": sqz_v.get("bb_upper"),
+        "bb_lower": sqz_v.get("bb_lower"),
+        "kc_upper": sqz_v.get("kc_upper"),
+        "kc_lower": sqz_v.get("kc_lower"),
     }

@@ -106,6 +106,7 @@ class KolLevels:
     target: Consensus | None = None
     n_signals: int = 0
     side: str | None = None          # dominant directional side by weight
+    played_out: int = 0              # rows spot has already traded through
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +167,27 @@ def _conviction_weight(conviction: float | None) -> float:
     if conviction is None:
         return _CONVICTION_FLOOR
     return max(_CONVICTION_FLOOR, min(1.0, float(conviction) / 5.0))
+
+
+def _played_out(row: dict, close: float | None) -> bool:
+    """Has the market already settled this call?
+
+    Age is not the only way a level goes stale. A LONG whose target sits
+    at or below spot is not a target — it is a price the market traded
+    through while the call aged, and adopting it points the trade
+    backwards. The entry and stop drawn alongside it describe the same
+    finished chart, so the whole row leaves the pool rather than
+    contributing rails to a setup it was never drawn for.
+
+    Without a spot price this cannot be judged, and the row stays: a
+    missing close must not silently empty the consensus.
+    """
+    if close is None or close <= 0:
+        return False
+    side, target = row.get("side"), row.get("target")
+    if target is None or side not in _DIRECTIONAL:
+        return False
+    return target <= close if side == "LONG" else target >= close
 
 
 # ---------------------------------------------------------------------------
@@ -259,11 +281,16 @@ def kol_levels_for_ticker(
     atr: float | None,
     weights: dict[str, dict] | None = None,
     now: datetime | None = None,
+    close: float | None = None,
 ) -> KolLevels:
     """Weighted consensus of the entry / stop / target humans drew.
 
     `weights` comes from `author_weights()` — pass it in when scoring a
     whole watchlist so the accuracy rollup is computed once per pass.
+
+    `close` is spot. Pass it wherever it is known: it is what lets a call
+    the market has already resolved drop out of the pool instead of
+    ageing quietly through the recency window.
     """
     if not atr or atr <= 0:
         return KolLevels()
@@ -276,6 +303,7 @@ def kol_levels_for_ticker(
     stops: list[Contributor] = []
     targets: list[Contributor] = []
     side_weight: dict[str, float] = {}
+    settled = 0
 
     for r in rows:
         aw = weights.get(r["author_id"]) or {
@@ -289,6 +317,9 @@ def kol_levels_for_ticker(
             * _conviction_weight(r["conviction"])
         )
         if w <= 0:
+            continue
+        if _played_out(r, close):
+            settled += 1
             continue
         if r["side"] in _DIRECTIONAL:
             side_weight[r["side"]] = side_weight.get(r["side"], 0.0) + w
@@ -322,6 +353,7 @@ def kol_levels_for_ticker(
         entry=_cluster(entries, tolerance),
         stop=_cluster(stops, tolerance),
         target=_cluster(targets, tolerance),
-        n_signals=len(rows),
+        n_signals=len(rows) - settled,
         side=dominant,
+        played_out=settled,
     )

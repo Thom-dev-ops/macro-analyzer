@@ -6,6 +6,7 @@ from macro_positioning.scoring.kol_levels import (
     Contributor,
     _cluster,
     _conviction_weight,
+    _played_out,
     _recency_weight,
 )
 
@@ -97,3 +98,29 @@ def test_no_points_or_no_tolerance_yields_no_consensus():
 
 def test_zero_weight_points_do_not_produce_a_level():
     assert _cluster([_contrib(3000, 0.0), _contrib(3010, 0.0)], tolerance=60) is None
+
+
+# --- calls the market has already settled -------------------------------
+
+def test_a_long_target_at_or_below_spot_has_played_out():
+    row = {"side": "LONG", "target": 172.0}
+    assert _played_out(row, 174.33) is True
+    assert _played_out(row, 172.0) is True, "touching the target still resolves it"
+    assert _played_out(row, 169.0) is False
+
+
+def test_a_short_target_at_or_above_spot_has_played_out():
+    row = {"side": "SHORT", "target": 172.0}
+    assert _played_out(row, 169.0) is True
+    assert _played_out(row, 174.33) is False
+
+
+def test_without_spot_nothing_is_dropped():
+    row = {"side": "LONG", "target": 172.0}
+    assert _played_out(row, None) is False
+    assert _played_out(row, 0.0) is False
+
+
+def test_rows_with_no_target_or_no_direction_survive():
+    assert _played_out({"side": "LONG", "target": None}, 174.33) is False
+    assert _played_out({"side": "WATCH", "target": 172.0}, 174.33) is False
