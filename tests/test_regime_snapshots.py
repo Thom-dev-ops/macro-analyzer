@@ -60,10 +60,14 @@ def test_transitions_collapse_consecutive_same_regime(db):
     # Backfill inserts 3 segments → 2 transition events.
     assert len(trans) == 2
     for t in trans:
-        assert set(t.keys()) == {"date", "from", "to"}
+        # Contract is additive — the SPA reads these by name, and v1 also
+        # attaches slugs plus how long the outgoing regime had held.
+        assert {"date", "from", "to"} <= set(t.keys())
         # Human-readable labels, not slugs
         assert "_" not in t["from"]
         assert "_" not in t["to"]
+        assert t["fromSlug"] and t["toSlug"]
+        assert t["priorRunDays"] >= 1
 
 
 def test_since_days_for_current_walks_back_from_end(db):
