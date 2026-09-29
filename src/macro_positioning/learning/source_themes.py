@@ -156,6 +156,7 @@ class AuthorThemes:
     category: Optional[str]
     n_drops: int
     n_with_vision: int
+    n_charts: int                        # drops with an image (analyzable denominator)
     top_tickers: list[tuple[str, int]]  # (ticker, count)
     bias_distribution: dict[str, int]    # {bullish: 12, bearish: 5, neutral: 3}
     top_setups: list[tuple[str, int]]
@@ -174,6 +175,7 @@ class AuthorThemes:
             "category": self.category,
             "n_drops": self.n_drops,
             "n_with_vision": self.n_with_vision,
+            "n_charts": self.n_charts,
             "top_tickers": self.top_tickers,
             "bias_distribution": self.bias_distribution,
             "top_setups": self.top_setups,
@@ -210,7 +212,8 @@ def author_themes(
         rows = conn.execute(
             """
             SELECT extracted_features_json, published_at, user_metadata_json,
-                   tags_json
+                   tags_json, attachment_paths_json, attachment_path,
+                   cleaned_text, raw_text
             FROM documents
             WHERE author_id = ?
             AND COALESCE(published_at, ingested_at) >= ?
@@ -218,7 +221,24 @@ def author_themes(
             (author_id, cutoff),
         ).fetchall()
 
-    n_drops = len(rows)
+    # A "drop" only counts as CONTENT if it's a chart (the image + its caption)
+    # or substantive text (mentions a ticker). Pure DM chatter — "Copy",
+    # "Call me", "Let's catch up" — is dropped from the count entirely; a
+    # DM/relay source shouldn't read "13/57" when 44 are one-word replies.
+    #   n_charts = chart drops (analyzable via vision)
+    #   n_drops  = content drops (charts + ticker-bearing text)
+    from macro_positioning.scoring.mention_extractor import extract_tickers_from_text
+    n_charts = 0
+    n_drops = 0
+    for r in rows:
+        is_chart = bool(r["attachment_paths_json"] or r["attachment_path"])
+        if is_chart:
+            n_charts += 1
+            n_drops += 1
+        else:
+            txt = r["cleaned_text"] or r["raw_text"] or ""
+            if txt and extract_tickers_from_text(txt):
+                n_drops += 1  # substantive text (has a ticker) — real content
     n_with_vision = 0
     ticker_counter: Counter[str] = Counter()
     bias_counter: Counter[str] = Counter()
@@ -457,6 +477,7 @@ def author_themes(
         category=meta["category"],
         n_drops=n_drops,
         n_with_vision=n_with_vision,
+        n_charts=n_charts,
         top_tickers=ticker_counter.most_common(15),
         bias_distribution=dict(bias_counter),
         top_setups=setup_counter.most_common(10),

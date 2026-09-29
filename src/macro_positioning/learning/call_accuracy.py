@@ -63,6 +63,41 @@ def _horizon_days(timeframe: Optional[str]) -> int:
     return _HORIZON_BY_TF.get(str(timeframe).strip().upper(), _DEFAULT_HORIZON_DAYS)
 
 
+_TF_BANDS: dict[str, str] = {
+    "1M": "intraday", "1MIN": "intraday", "5M": "intraday",
+    "15M": "intraday", "30M": "intraday", "1H": "intraday",
+    "2H": "swing", "4H": "swing", "8H": "swing",
+    "1D": "swing", "D": "swing", "1DAY": "swing",
+    "3D": "position", "1W": "position", "W": "position",
+    "1WK": "position", "1MO": "position",
+}
+
+
+def _tf_band(timeframe: Optional[str]) -> Optional[str]:
+    """Which business is this call in?
+
+    An author is not one edge. The same person posting 15m scalps and 1W
+    Elliott counts is running two strategies with different hold times,
+    different stop widths and — measured — an 8x difference in expectancy.
+    Banding lets a weight be learned per (author, band) instead of per
+    author, which is the difference between a usable prior and an average.
+    """
+    if not timeframe:
+        return None
+    return _TF_BANDS.get(str(timeframe).strip().upper())
+
+
+def _stop_width(entry, stop) -> Optional[float]:
+    """|entry - stop| / entry. None when either leg is missing."""
+    try:
+        e, st = float(entry), float(stop)
+    except (TypeError, ValueError):
+        return None
+    if e <= 0 or st <= 0:
+        return None
+    return round(abs(e - st) / e, 6)
+
+
 def _num(v) -> Optional[float]:
     """Coerce a price-ish value to float, tolerating strings like '0.2154'."""
     if v is None:
@@ -207,7 +242,7 @@ _MAX_SANE_R = 8.0
 
 def _score_one(
     call: dict, bars: list[tuple[datetime, float, float, float]], dt: datetime,
-    btc_bars=None,
+    btc_bars=None,          # the BENCHMARK's bars — BTC or SPY, chosen by caller
 ) -> dict:
     """Compute directional + setup-resolution outcome + market-relative alpha."""
     horizon = _horizon_days(call["timeframe"])
@@ -330,9 +365,15 @@ def backtest_calls(*, db_path: Optional[Path] = None) -> dict:
             parsed.append((r, call, dt))
             symbols.add(call["symbol"])
 
-        symbols.add("BTC")  # ensure BTC bars loaded for the alpha (market) baseline
+        # Both benchmarks, always — which one a call uses is decided per
+        # call by `_benchmark_for`, not by what the corpus happens to hold.
+        symbols.add("BTC")
+        symbols.add("SPY")
         bars_by_sym = _load_bars(conn, symbols)
-        btc_bars = bars_by_sym.get("BTC", [])
+        benchmarks = {
+            "BTC": bars_by_sym.get("BTC", []),
+            "SPY": bars_by_sym.get("SPY", []),
+        }
 
         scored = 0
         no_price = 0
@@ -345,7 +386,10 @@ def backtest_calls(*, db_path: Optional[Path] = None) -> dict:
                           "direction": call["direction"], "fwd_return_pct": None,
                           "r_multiple": None})
                 continue
-            outcome = _score_one(call, bars, dt, btc_bars=btc_bars)
+            outcome = _score_one(
+                call, bars, dt,
+                btc_bars=benchmarks.get(_benchmark_for(call.get("symbol"))) or [],
+            )
             _persist(conn, r["document_id"], r["author_id"], call, dt, outcome)
             scored += 1
         conn.commit()
@@ -376,17 +420,78 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
             fwd_return_pct REAL,
             resolved      TEXT,          -- win|loss|open|unpriceable|no_price_data
             r_multiple    REAL,
-            alpha_pct     REAL,           -- call return − BTC return (same window/dir)
+            alpha_pct     REAL,           -- call return − benchmark (BTC crypto / SPY equity)
             call_at       TEXT,
             scored_at     TEXT NOT NULL
         )
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_call_outcomes_author ON call_outcomes(author_id)")
-    # add alpha_pct if table pre-exists without it (idempotent migration)
+    # Idempotent migrations. Each column is added once, on a table that
+    # already exists from an earlier version.
     cols = {c[1] for c in conn.execute("PRAGMA table_info(call_outcomes)").fetchall()}
     if "alpha_pct" not in cols:
         conn.execute("ALTER TABLE call_outcomes ADD COLUMN alpha_pct REAL")
+    # How far the author put the stop, as a fraction of entry. A per-author
+    # average hides that this crowd's tight-stop scalps and their 20%-stop
+    # position trades are different businesses with different edges.
+    if "stop_width_pct" not in cols:
+        conn.execute("ALTER TABLE call_outcomes ADD COLUMN stop_width_pct REAL")
+    # intraday | swing | position — banded from the chart the call was drawn
+    # on. Measured Sep 2026: expectancy 0.81% / 1.97% / 6.69% across these
+    # three, so an unsegmented author number averages an 8x spread into one
+    # misleading figure.
+    if "tf_band" not in cols:
+        conn.execute("ALTER TABLE call_outcomes ADD COLUMN tf_band TEXT")
+    # 1 when the symbol has a venue the desk can actually fill on — a
+    # Coinbase book, or a listed equity. 0 for the DEX pairs and microcaps
+    # with neither. Rows are kept either way (they are still evidence about
+    # the caller) but every weight and headline number filters on this: an
+    # edge on something nobody can buy is not an edge this desk can spend.
+    if "real_asset" not in cols:
+        conn.execute("ALTER TABLE call_outcomes ADD COLUMN real_asset INTEGER")
+
+
+def _benchmark_for(symbol: Optional[str]) -> str:
+    """Which market is this call's beta?
+
+    Alpha means "return the caller produced beyond just being in this
+    market". Subtracting BTC from an EQUITY call does not measure that —
+    it measures how crypto did that week, and it mis-scores whole sources:
+    Stock Unlocked (US equities, text calls) read -14.3% alpha in Sep 2026
+    almost entirely because BTC outran its names over the same windows.
+    Equities benchmark to SPY, crypto to BTC.
+    """
+    try:
+        from macro_positioning.prices.symbol_map import is_crypto
+
+        return "BTC" if is_crypto(symbol or "") else "SPY"
+    except Exception:
+        return "BTC"
+
+
+def _is_real_asset(symbol: Optional[str]) -> bool:
+    """Is this something the desk could actually put money into?
+
+    The test is the VENUE. Anything with a Coinbase book counts, the
+    whole alt tail included; anything without one does not, which is what
+    removes the DEX pairs and microcaps this crowd posts by the hundred
+    (KINS/SOL, JOTCHUA/USDC, SCHIFFY/GLD) — no venue, and usually no
+    price feed to score against either. Listed equities are a separate
+    venue and count.
+
+    `book_tradeable` is the single definition, shared with the paper
+    books, so a learned weight and a holdable position can never disagree
+    about what was measurable.
+    """
+    if not symbol:
+        return False
+    try:
+        from macro_positioning.prices.symbol_map import book_tradeable
+
+        return bool(book_tradeable(symbol))
+    except Exception:          # universe cache unavailable — do not claim
+        return False
 
 
 def _persist(conn, document_id, author_id, call, dt, outcome) -> None:
@@ -395,8 +500,9 @@ def _persist(conn, document_id, author_id, call, dt, outcome) -> None:
         INSERT OR REPLACE INTO call_outcomes (
             document_id, author_id, raw_ticker, ticker, symbol, direction,
             timeframe, entry_px, stop_px, target_px, horizon_days,
-            fwd_return_pct, resolved, r_multiple, alpha_pct, call_at, scored_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            fwd_return_pct, resolved, r_multiple, alpha_pct,
+            stop_width_pct, tf_band, real_asset, call_at, scored_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             document_id, author_id, call.get("raw_ticker"), call.get("ticker"),
@@ -405,6 +511,9 @@ def _persist(conn, document_id, author_id, call, dt, outcome) -> None:
             outcome.get("horizon_days"), outcome.get("fwd_return_pct"),
             outcome.get("resolved"), outcome.get("r_multiple"),
             outcome.get("alpha_pct"),
+            _stop_width(call.get("entry"), call.get("stop")),
+            _tf_band(call.get("timeframe")),
+            1 if _is_real_asset(call.get("symbol")) else 0,
             dt.isoformat(), datetime.now(UTC).isoformat(),
         ),
     )
@@ -413,34 +522,54 @@ def _persist(conn, document_id, author_id, call, dt, outcome) -> None:
 # ── Per-source rollup ────────────────────────────────────────────────────────
 
 def source_accuracy(
-    *, window_days: Optional[int] = None, db_path: Optional[Path] = None
+    *, window_days: Optional[int] = None, db_path: Optional[Path] = None,
+    real_assets_only: bool = True, by_timeframe: bool = False,
 ) -> list[dict]:
-    """Per-author accuracy rollup from call_outcomes. One row per author with
-    win rate, avg forward return, setup win rate, avg R, expectancy."""
+    """Per-author accuracy rollup from call_outcomes.
+
+    `real_assets_only` (the default) restricts every number to symbols the
+    desk would actually hold — listed equities and crypto majors. The DEX
+    pairs and the Coinbase alt tail stay in the table as evidence about
+    the caller, but they do not get a vote in any published figure or any
+    learned weight: an edge on a microcap nobody can size into is not an
+    edge this desk can spend.
+
+    `by_timeframe` splits each author into intraday / swing / position
+    rows instead of one blended row. Use it wherever the number drives a
+    decision — the three bands measured 0.81% / 1.97% / 6.69% expectancy
+    in Sep 2026, and averaging them describes nobody.
+    """
     db_path = db_path or settings.sqlite_path
-    where = ""
-    params: tuple = ()
+    clauses: list[str] = []
+    params: list = []
     if window_days:
-        cutoff = (datetime.now(UTC) - timedelta(days=window_days)).isoformat()
-        where = "WHERE call_at >= ?"
-        params = (cutoff,)
+        clauses.append("call_at >= ?")
+        params.append((datetime.now(UTC) - timedelta(days=window_days)).isoformat())
+    if real_assets_only:
+        # NULL means scored before the column existed — excluded on purpose,
+        # so a stale row can never silently count as tradeable.
+        clauses.append("real_asset = 1")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            f"SELECT * FROM call_outcomes {where}", params
+            f"SELECT * FROM call_outcomes {where}", tuple(params)
         ).fetchall()
         names = dict(conn.execute(
             "SELECT author_id, display_name FROM input_authors"
         ).fetchall())
 
-    by_author: dict[str, dict] = defaultdict(lambda: {
+    by_author: dict[tuple, dict] = defaultdict(lambda: {
         "n_calls": 0, "n_priceable": 0, "n_unpriceable": 0,
         "dir_wins": 0, "dir_scored": 0, "ret_sum": 0.0, "ret_n": 0,
         "alpha_sum": 0.0, "alpha_n": 0, "alpha_wins": 0,
         "setup_wins": 0, "setup_losses": 0, "r_sum": 0.0, "r_n": 0,
+        "stop_sum": 0.0, "stop_n": 0,
     })
     for r in rows:
-        a = by_author[r["author_id"]]
+        key = (r["author_id"], r["tf_band"] or "unbanded") if by_timeframe else (
+            r["author_id"], None)
+        a = by_author[key]
         a["n_calls"] += 1
         resolved = r["resolved"]
         if resolved in ("unpriceable", "no_price_data"):
@@ -462,9 +591,11 @@ def source_accuracy(
             a["setup_losses"] += 1
         if r["r_multiple"] is not None:
             a["r_sum"] += r["r_multiple"]; a["r_n"] += 1
+        if r["stop_width_pct"] is not None:
+            a["stop_sum"] += r["stop_width_pct"]; a["stop_n"] += 1
 
     out = []
-    for author_id, a in by_author.items():
+    for (author_id, band), a in by_author.items():
         setup_n = a["setup_wins"] + a["setup_losses"]
         # Min-sample gate: a verdict needs enough priceable calls to mean
         # anything. Below this we still return the row but flag it.
@@ -472,6 +603,7 @@ def source_accuracy(
         out.append({
             "author_id": author_id,
             "display_name": names.get(author_id, author_id),
+            "tf_band": band,
             "n_calls": a["n_calls"],
             "n_priceable": a["n_priceable"],
             "n_unpriceable": a["n_unpriceable"],
@@ -479,12 +611,18 @@ def source_accuracy(
             # Setup-resolution is the PRIMARY skill metric (target-before-stop).
             "setup_win_rate": round(a["setup_wins"] / setup_n, 4) if setup_n else None,
             "avg_r_planned": round(a["r_sum"] / a["r_n"], 2) if a["r_n"] else None,
-            # Alpha = market-relative (beats BTC) — strips crypto beta.
+            # Alpha = market-relative (BTC for crypto, SPY for equities).
             "alpha_win_rate": round(a["alpha_wins"] / a["alpha_n"], 4) if a["alpha_n"] else None,
             "avg_alpha_pct": round(a["alpha_sum"] / a["alpha_n"], 3) if a["alpha_n"] else None,
             # Buy-and-hold directional (kept for reference; beta-dominated).
             "win_rate": round(a["dir_wins"] / a["dir_scored"], 4) if a["dir_scored"] else None,
             "avg_return_pct": round(a["ret_sum"] / a["ret_n"], 3) if a["ret_n"] else None,
+            # How far this author puts the stop, on average. The desk's own
+            # max_stop_pct decides whether a book can take that at all.
+            "avg_stop_width_pct": (
+                round(a["stop_sum"] / a["stop_n"] * 100, 2) if a["stop_n"] else None
+            ),
+            "real_assets_only": real_assets_only,
         })
     # Rank meaningful sources first, then by setup win rate, then alpha.
     out.sort(key=lambda x: (
