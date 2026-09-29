@@ -1092,3 +1092,72 @@ intended vs realized horizon per sleeve. The data will say.
 to "which input moved first": one row per open position per tick with
 rank, score, the four views' deltas, the signal blend, regime, unrealized
 R, days held, exit path, and any thesis exit being watched.
+
+## 2026-09-22 — Scope is not mandate; and a sector is enough to classify
+
+The paper page's attribution was reporting fifty-nine unmapped names, and
+two different mistakes were producing them.
+
+**The books were trading the whole scope set.** `resolve_symbol` answers
+"can this be priced and is it in this desk's world", and its crypto gate
+is Coinbase's ~405-name product list. That is the right width for the
+accuracy layer — a call this desk would never take still says something
+about the caller, so scoring it is information. It is the wrong width for
+a BOOK, and nothing was narrowing it, so the Stock Unlocked replay opened
+twenty-five positions in the alt tail: FARTCOIN, PENGU, TRUMP, 1INCH,
+SKL, RAY. Twenty-five trades of real risk for +$27 net.
+
+`book_tradeable()` in `prices/symbol_map.py` is the narrowing. A book
+holds listed equities and the crypto MAJORS from
+`config/crypto_universe.json`; everything else is refused at the
+candidate screen and counted as `crypto_not_major` so the coverage line
+says what was turned away rather than hiding it. The test is free because
+of a choice already made: `resolve_symbol` keys a major by its bare
+ticker and every other Coinbase coin by its `-USD` yfinance form, so the
+key itself says which one it is.
+
+**Classification was an allowlist pretending to be a taxonomy.**
+`paper_sleeves.json` held the names this desk had already formed an
+opinion about — index ETFs, megacaps, thematic baskets. The copy books do
+not trade that list; they trade whatever their channel posts, which is
+mostly small-cap momentum nobody had typed in. ABAT is American Battery
+Technology. Everybody knows what that is. It was unclassified because
+classification was a typing exercise.
+
+So the resolution order is now three passes, narrowest evidence first:
+declared membership, then the ticker's own sector via `$sector_fallback`
+in the sleeves config against `config/ticker_sectors.json`, then
+`unclassified` — which now means "nothing anywhere knows this name"
+rather than "nobody got round to it". Industry is checked before sector,
+because industry is what carries the thesis: `Aerospace & Defense` is a
+defense name whichever parent sector a screener filed it under, and
+`Other Industrial Metals & Mining` is the critical-minerals trade while
+its parent, Basic Materials, also holds the gold miners.
+
+Explicit membership still beats the fallback, and that is load-bearing in
+exactly the cases where a screener is wrong about what a company is:
+IREN and WULF are filed under Capital Markets and are levered bets on
+bitcoin; ABAT is filed under Waste Management and is a lithium trade;
+ONDS, UMAC and SATL are filed under Technology and are drone and satellite
+defense names.
+
+`config/ticker_sectors.json` is data only — ticker → name/sector/industry
+— rebuilt by `scripts/refresh_ticker_sectors.py --write` and checked in
+for the same reason `crypto_universe.json` is: a classification change
+should arrive as a reviewable commit, not as a silent attribution shift
+on a morning tick. It is also why the lookup reads a file rather than
+calling yfinance from the request path — the performance endpoint
+resolves a sleeve per position and must not depend on a network hop.
+
+**Two new sleeves.** `crypto_alts` (the non-major Coinbase tail) exists
+so the replayed history stays attributable without letting the alt tail's
+P&L read as ordinary crypto beta and flatter the majors. `power_grid`
+(EOSE, NRGV, storage and generation) is the demand side of the same
+electrification trade `industrial_metals` owns the supply side of; it was
+missing until the copy book bought two of them and neither had anywhere
+to go.
+
+**Left as a judgment call, one config line each:** CELH, ELF and KAVL
+resolve to `defensives` because GICS calls them Consumer Defensive, which
+is factually right and behaviourally arguable — all three trade on the
+discretionary cycle, not the defensive one.

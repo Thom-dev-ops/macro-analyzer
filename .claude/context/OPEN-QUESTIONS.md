@@ -4,12 +4,24 @@ Active items waiting on user input or external action.
 
 ---
 
-## Alerts — Telegram bot token (blocks delivery)
+## Alerts — Telegram delivery ✅ RESOLVED 2026-08-24
 
-- [2026-08-24] The alerts layer is built, tested, replayed against August
-  history, and scheduled hourly (`com.macro.alert-watch`). It is
-  **deriving and recording alerts but cannot deliver them** until the
-  operator creates a Telegram bot — this is the one step that can't be
+- [2026-08-24] Bot created and authorized; delivery verified end to end
+  (bot `8854570939` → DM). Gmail token also re-authorized the same day —
+  19 messages fetched, 18 new documents, first newsletter ingest since
+  2026-08-11.
+
+  **Still open:** whether the OAuth consent screen was *published*, or
+  only re-authorized. If it is still in Testing status the refresh token
+  dies 7 days after issue and `com.macro.gmail-token-check` will ping
+  around **2026-08-31**. No ping = published = the weekly chore is gone.
+
+  <details>Original entry — the setup steps, kept for reference:
+
+  The alerts layer is built, tested, replayed against August
+  history, and scheduled hourly (`com.macro.alert-watch`). It was
+  deriving and recording alerts but could not deliver them until the
+  operator created a Telegram bot — this is the one step that can't be
   automated, because @BotFather only talks to a human:
 
   1. Message **@BotFather** → `/newbot` → copy the token
@@ -21,6 +33,23 @@ Active items waiting on user input or external action.
 
   Nothing fired in the meantime is lost: undelivered alerts are retried
   for `alert_redelivery_window_hours` (24h) after the token lands.
+  </details>
+
+---
+
+## Alerts layer — two owners, one package
+
+- [2026-08-24] A concurrent session is committing to the same branch and
+  package: `22615d4` added `alerts/direction_rules.py` (zone_arrival,
+  tape_flip, horizon_divergence, conviction_build, proven_voice_call) and
+  `86f240f` shipped levels v2. Formatting changed under the operator
+  mid-session because of it.
+
+  **Worth resolving:** those direction rules emit outside
+  `rules.evaluate`, so they bypass the `logic_version` guard added in
+  `e2f788f` — a scoring-logic change can still manufacture direction
+  alerts, which is exactly what produced the false "FCX cleared 75". Either
+  extend the guard to their emit path or agree an owner for the package.
 
 ---
 

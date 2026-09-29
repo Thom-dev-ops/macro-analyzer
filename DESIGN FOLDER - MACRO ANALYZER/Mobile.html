@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Macro Analyzer — Mobile design canvas</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+<style>
+  /* Make the canvas inherit the desk's near-black aesthetic */
+  html, body { background: #0d0e0c; color: #ece6d4; }
+  body { margin: 0; }
+  /* design canvas overrides */
+  body > #root { min-height: 100vh; }
+  /* Soften artboard chrome to fit the dark palette */
+  .dc-artboard, .dc-artboard-frame {
+    background: transparent !important;
+  }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script src="data.js"></script>
+<script type="text/babel" src="components.jsx"></script>
+<script type="text/babel" src="mobile/ios-frame.jsx"></script>
+<script type="text/babel" src="mobile/design-canvas.jsx"></script>
+<script type="text/babel" src="mobile/mobile-screens.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+  const PHONE_W = 392;
+  const PHONE_H = 850;
+
+  function MobileCanvas() {
+    return (
+      <DesignCanvas>
+        <DCSection id="hub" title="Hub & feeds" subtitle="Top-level mobile views — what the trader lands on">
+          <DCArtboard id="positioning" label="01 · Positioning home" width={PHONE_W} height={PHONE_H}>
+            <MS_PositioningHome />
+          </DCArtboard>
+          <DCArtboard id="alerts" label="08 · Alerts feed" width={PHONE_W} height={PHONE_H}>
+            <MS_Alerts />
+          </DCArtboard>
+          <DCArtboard id="journal" label="06 · Journal" width={PHONE_W} height={PHONE_H}>
+            <MS_Journal />
+          </DCArtboard>
+          <DCArtboard id="regime" label="07 · Regime + thesis" width={PHONE_W} height={PHONE_H}>
+            <MS_Regime />
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection id="asset-flow" title="Asset flow" subtitle="From a hero card → asset → reasoning trail">
+          <DCArtboard id="asset" label="02 · Asset detail" width={PHONE_W} height={PHONE_H}>
+            <MS_AssetDetail />
+          </DCArtboard>
+          <DCArtboard id="reasoning" label="03 · Reasoning trail" width={PHONE_W} height={PHONE_H}>
+            <MS_Reasoning />
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection id="trade-flow" title="Trade flow" subtitle="Logging a new trade · managing an open one">
+          <DCArtboard id="trade-log" label="05 · Trade log · new" width={PHONE_W} height={PHONE_H}>
+            <MS_TradeLog />
+          </DCArtboard>
+          <DCArtboard id="active-trade" label="04 · Active trade" width={PHONE_W} height={PHONE_H}>
+            <MS_ActiveTrade />
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection id="config" title="Config" subtitle="Agents, spend, alert toggles">
+          <DCArtboard id="settings" label="09 · Settings" width={PHONE_W} height={PHONE_H}>
+            <MS_Settings />
+          </DCArtboard>
+        </DCSection>
+      </DesignCanvas>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<MobileCanvas />);
+</script>
+
+</body>
+</html>

@@ -22,6 +22,7 @@ Each file in this directory is a self-contained kickoff prompt for a worker chat
 - [`ml-learning-loop.md`](ml-learning-loop.md) — source attribution, score-outcome correlation, retraining infra
 - [`llm-agents.md`](llm-agents.md) — regime_classifier + narrative_synthesizer wired to Gemini
 - [`manual-input.md`](manual-input.md) — drag-drop charts/text → chart_vision (already in flight; this is the refresh brief)
+- [`chart-lab.md`](chart-lab.md) — desk chart reading + single-ticker setup bench on the CLI, no API spend
 
 ## Schema-change protocol
 
