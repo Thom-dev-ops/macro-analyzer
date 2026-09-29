@@ -166,17 +166,23 @@ def morning_run() -> dict:
         from macro_positioning.prices.fetcher import fetch_and_persist as fetch_prices_persist
         from macro_positioning.scoring.watchlist_resolver import resolve_watchlist
 
+        from macro_positioning.prices.symbol_map import crypto_majors, resolve_symbol
+
         # Anchors + theme-aligned for active regime hint.
         resolved = resolve_watchlist(framework_regime="commodity_led_inflation")
         tickers: set[str] = {e.ticker for e in resolved.entries}
+        tickers |= set(crypto_majors())
         # Plus recently-signalled tickers so the composer can score them.
+        # Resolved first: these arrive as raw pairs ('BTC/USDT', 'KINS/SOL')
+        # and yfinance answers none of them in that form.
         with _sqlite3.connect(settings.sqlite_path) as _conn:
             for (t,) in _conn.execute(
                 "SELECT DISTINCT asset_ticker FROM signals "
                 "WHERE extracted_at >= datetime('now','-14 day')"
             ).fetchall():
-                if t:
-                    tickers.add(str(t).upper())
+                key = resolve_symbol(str(t or ""))
+                if key:
+                    tickers.add(key)
         if tickers:
             price_result = fetch_prices_persist(sorted(tickers), days=200)
             summary["steps"]["prices"] = {

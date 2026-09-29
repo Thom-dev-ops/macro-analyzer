@@ -81,6 +81,8 @@ FIN_CONDITIONS_SERIES = {
     "STLFSI4": ("financial_conditions", "St. Louis Fed FSI", "index"),
     "VIXCLS": ("financial_conditions", "VIX", "index"),
     "DTWEXBGS": ("financial_conditions", "Trade-Weighted USD", "index"),
+    "M2SL": ("financial_conditions", "M2 Money Supply", "$B"),
+    "DJIA": ("financial_conditions", "Dow Jones Industrial Avg", "index"),
     "DFF": ("financial_conditions", "Effective Fed Funds Rate", "%"),
     "SOFR": ("financial_conditions", "SOFR", "%"),
     "TEDRATE": ("financial_conditions", "TED Spread", "%"),

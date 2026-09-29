@@ -403,3 +403,113 @@ def test_runner_extracts_and_records_attempts(db, monkeypatch):
     # Re-run should pick up zero new docs (attempts table dedupes)
     summary2 = extract_pending(limit=10, since_days=365, db_path=db)
     assert summary2.docs_seen == 0
+
+
+# ── Chart docs: a failed vision run must not tombstone the doc ──────────────
+#
+# Regression for Sept 2026: every Telegram chart from Sep 4–22 came back
+# `400 invalid_request_error: temperature is deprecated for this model`.
+# The drainer called that PERMANENT and cleared pending_vision; the
+# extractor called it `no_signal`; pending_documents() treats no_signal as
+# terminal. Net effect — 519 charts silently stopped becoming signals, the
+# ingest step logged `STEP OK 0 signals` twice a day, and the cohort paper
+# book saw an empty tape while its shorts ran through their stops.
+
+
+_TEMP_400 = (
+    "Error code: 400 - {'type': 'error', 'error': {'type': "
+    "'invalid_request_error', 'message': '`temperature` is deprecated "
+    "for this model.'}}"
+)
+
+
+def _insert_chart_doc(db_path, doc_id: str, features: dict) -> str:
+    _insert_doc(
+        db_path,
+        document_id=doc_id,
+        source_id="manual:telegram-channel:feather_hands",
+        title="Big_Nuts · chart",
+        content_type="manual_chart",
+        raw_text="ETH bull flag",
+        cleaned_text="ETH bull flag",
+        author="Big_Nuts",
+        author_id="feather-hands:big-nuts",
+        tags_json=json.dumps({"tags": ["manual"]}),
+        user_metadata_json=json.dumps({"channel": "feather_hands"}),
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE documents SET extracted_features_json = ? WHERE document_id = ?",
+            (json.dumps(features), doc_id),
+        )
+        conn.commit()
+    return doc_id
+
+
+def test_failed_vision_run_leaves_chart_doc_pending(db):
+    """A retryable vision failure is `error`, not `no_signal`.
+
+    `error` is the only status pending_documents() does not treat as
+    terminal, so the doc comes back round once the vision run is repaired.
+    """
+    from macro_positioning.signals.manual_chart_extractor import ManualChartExtractor
+
+    doc_id = _insert_chart_doc(
+        db, "doc-chart-failed",
+        {"error": "all images failed", "_images": [{"error": _TEMP_400}]},
+    )
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        doc = dict(conn.execute(
+            "SELECT * FROM documents WHERE document_id = ?", (doc_id,)
+        ).fetchone())
+
+    result = ManualChartExtractor().extract(doc, run_id="t")
+    assert result.status == "error", "a fixable 400 is not a verdict on the chart"
+
+    repository.record_attempt(result, db_path=db)
+    still_pending = repository.pending_documents(
+        limit=10, since_days=365,
+        extractor_name="manual_chart_extractor", db_path=db,
+    )
+    assert doc_id in {d["document_id"] for d in still_pending}
+
+
+def test_permanent_vision_verdict_is_terminal(db):
+    """`not_a_chart` IS an answer — it must stay tombstoned, or every
+    screenshot in the channel is re-read on every pass forever."""
+    from macro_positioning.signals.manual_chart_extractor import ManualChartExtractor
+
+    doc_id = _insert_chart_doc(
+        db, "doc-chart-notachart",
+        {"error": "all images failed", "_images": [{"error": "not_a_chart"}]},
+    )
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        doc = dict(conn.execute(
+            "SELECT * FROM documents WHERE document_id = ?", (doc_id,)
+        ).fetchone())
+
+    result = ManualChartExtractor().extract(doc, run_id="t")
+    assert result.status == "no_signal"
+
+    repository.record_attempt(result, db_path=db)
+    pending = repository.pending_documents(
+        limit=10, since_days=365,
+        extractor_name="manual_chart_extractor", db_path=db,
+    )
+    assert doc_id not in {d["document_id"] for d in pending}
+
+
+def test_request_shape_400_is_retryable_but_image_faults_are_not():
+    """The drainer's classifier is what both sides key off — pin it."""
+    from macro_positioning.manual.vision_drainer import _merged_is_transient
+
+    assert _merged_is_transient([{"error": _TEMP_400}])
+    assert _merged_is_transient([{"error": "overloaded_error"}])
+    assert not _merged_is_transient([{"error": "not_a_chart"}])
+    assert not _merged_is_transient([{"error": "no_attachment"}])
+    # A 400 about the bytes themselves will fail identically on a re-run.
+    assert not _merged_is_transient([
+        {"error": "invalid_request_error: image exceeds 5 MB maximum"}
+    ])

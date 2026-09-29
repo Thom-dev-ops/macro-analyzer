@@ -9,7 +9,7 @@
     <string>/Users/thom/Documents/Personal/Code Projects/Macro Analyzer/.venv/bin/python</string>
     <string>scripts/start_telegram_listener.py</string>
     <string>--channels</string>
-    <string>feather_hands_trading,gem_hunters,og_whales,the_wolf_pack,ari_gold,trading_operation_desk</string>
+    <string>feather_hands_trading,gem_hunters,og_whales,the_wolf_pack,ari_gold,trading_operation_desk,stock_unlocked</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/thom/Documents/Personal/Code Projects/Macro Analyzer</string>

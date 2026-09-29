@@ -85,7 +85,7 @@
       "source_type": "newsletter",
       "author": "Stock Unlocked",
       "priority": "core",
-      "trust_weight": 0.75,
+      "trust_weight": 0.95,
       "market_focus": [
         "equities",
         "crypto",
@@ -96,9 +96,9 @@
         "crypto",
         "geopolitics"
       ],
-      "fetch_cadence": "P1W",
-      "freshness_sla_hours": 168,
-      "research_style": "Trade-oriented weekly briefing covering crypto trades, stock picks, and macro/geopolitical context.",
+      "fetch_cadence": "realtime",
+      "freshness_sla_hours": 24,
+      "research_style": "Trade desk. The Telegram channel relays nothing but executable calls \u2014 ticker, side, entry, up to four targets, stop \u2014 plus lifecycle updates and exits. The weekly email remains a briefing. A-class / tier-one per user direction.",
       "validation_focus": [
         "dovish_liquidity_wave",
         "war_escalation"
@@ -113,6 +113,12 @@
           "channel_type": "gmail",
           "label": "Gmail newsletter",
           "url": "gmail://search/from:noreply@stockunlocked.com"
+        },
+        {
+          "channel_type": "telegram",
+          "label": "Telegram trades channel",
+          "url": "",
+          "notes": "Private channel 'Stock Unlocked Trades' (chat_id -1002752726473); ingested by the Telethon listener as slug stock_unlocked."
         }
       ],
       "onboarded_at": "2026-04-19",

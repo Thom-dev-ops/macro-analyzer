@@ -15,6 +15,8 @@ to. Each extractor's output is persisted as its own Signal rows.
 
 from __future__ import annotations
 
+
+from macro_positioning.chartlab import DESK_SOURCE_PREFIX
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -118,6 +120,32 @@ def choose_extractors(document: dict) -> list[str]:
     # pending_vision clears. See _pending_vision.
     if _pending_vision(document):
         return []
+    # Telegram-channel chart drops go through the manual/vision.py locked
+    # prompt at ingest time; its structured output lives on the document
+    # row as extracted_features_json. Project it directly instead of
+    # re-running the legacy vision_extractor (which errors ~50% of the
+    # time on "no ticker resolvable"). llm_extractor is skipped here —
+    # captions on chart forwards are 3–5 words and the vision output
+    # already carries the thesis in `notes`.
+    # Stock Unlocked relays trade calls as structured TEXT, not charts:
+    # ticker, side, entry, every target and the stop are stated in words.
+    # A deterministic parse of those words beats an LLM re-reading them,
+    # and costs nothing — so this source never touches llm_extractor.
+    if (document.get("source_id") or "") == "manual:telegram-channel:stock_unlocked":
+        return ["stock_unlocked_extractor"]
+    slug = _source_slug_of(document)
+    source_id = document.get("source_id", "") or ""
+    content_type = document.get("content_type") or ""
+    if slug == "manual" and content_type == "manual_chart":
+        if source_id.startswith("manual:telegram-channel:"):
+            return ["manual_chart_extractor"]
+    # Chart Lab: a chart the desk read itself. Same structured output on
+    # the same column, so the same projector applies — the separate
+    # `desk:` namespace is what keeps the desk's own read out of
+    # trusted-voice consensus downstream.
+    if slug == "desk" and content_type == "manual_chart":
+        if source_id.startswith(DESK_SOURCE_PREFIX):
+            return ["manual_chart_extractor"]
     if _has_attachment(document):
         # Vision first so its levels are persisted before the LLM call,
         # which on slow Gemini days can take several seconds.
@@ -133,10 +161,14 @@ def build_registry() -> dict[str, "ExtractorProtocol"]:
     """
     from macro_positioning.signals.insider_extractor import InsiderExtractor
     from macro_positioning.signals.llm_extractor import LLMExtractor
+    from macro_positioning.signals.manual_chart_extractor import ManualChartExtractor
+    from macro_positioning.signals.stock_unlocked_extractor import StockUnlockedExtractor
     from macro_positioning.signals.vision_extractor import VisionExtractor
 
     return {
         "insider_extractor": InsiderExtractor(),
         "llm_extractor": LLMExtractor(),
+        "manual_chart_extractor": ManualChartExtractor(),
+        "stock_unlocked_extractor": StockUnlockedExtractor(),
         "vision_extractor": VisionExtractor(),
     }

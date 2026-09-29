@@ -188,6 +188,29 @@ _TRANSIENT_MARKERS = (
     "api_error", "temporarily",
 )
 
+# A 400 `invalid_request_error` is almost never a verdict on the IMAGE —
+# it is our own request shape being wrong: a sampling param the model no
+# longer accepts, a stale model id, a bad header. Re-running after the
+# code is fixed WILL change the answer, which is the definition of
+# retryable. Burning the doc instead is how 519 charts went dark behind
+# `temperature is deprecated for this model` in Sept 2026: permanent by
+# classification, trivially fixable in fact.
+#
+# The exception is a 400 that IS about the image (too large, unsupported
+# media type, corrupt) — re-sending the same bytes will fail identically,
+# so those stay permanent.
+_REQUEST_SHAPE_MARKERS = (
+    "invalid_request_error",
+    "is deprecated",
+    "unexpected keyword",
+    "unsupported parameter",
+    "model not found", "not_found_error",
+)
+_IMAGE_FAULT_MARKERS = (
+    "image", "media type", "media_type", "exceeds", "too large",
+    "could not process", "unsupported format", "base64",
+)
+
 
 def _merged_is_transient(per_image: list[dict]) -> bool:
     """True if ANY per-image error looks transient/retryable.
@@ -201,7 +224,15 @@ def _merged_is_transient(per_image: list[dict]) -> bool:
         if not isinstance(img, dict):
             continue
         err = str(img.get("error", "")).lower()
-        if err and any(m in err for m in _TRANSIENT_MARKERS):
+        if not err:
+            continue
+        if any(m in err for m in _TRANSIENT_MARKERS):
+            return True
+        # Our request was malformed, not the image — retryable once the
+        # code is fixed, unless the 400 is specifically about the bytes.
+        if any(m in err for m in _REQUEST_SHAPE_MARKERS) and not any(
+            m in err for m in _IMAGE_FAULT_MARKERS
+        ):
             return True
     return False
 

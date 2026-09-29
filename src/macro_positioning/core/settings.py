@@ -185,12 +185,13 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""        # Claude API key
     claude_model: str = "claude-sonnet-4-5"
 
-    # Manual-input chart vision. Default Sonnet (5x cheaper than Opus,
-    # near-Opus quality on chart extraction). Override per-call (e.g.
-    # MPA_VISION_MODEL=claude-opus-4-6 for high-conviction reprocessing
-    # of past drops). Image preprocessing settings tame token cost on the
-    # multimodal call without hurting chart legibility.
-    vision_model: str = "claude-sonnet-4-6"
+    # Manual-input chart vision. Default Sonnet 5 — 33% cheaper input/output
+    # than Sonnet 4.6 ($2/$10 vs $3/$15 per 1M) at same-or-better vision quality.
+    # Override per-call (e.g. MPA_VISION_MODEL=claude-opus-5 for high-conviction
+    # reprocessing of past drops; Opus is now only ~2.5x Sonnet 5, not 5x).
+    # Image preprocessing settings tame token cost on the multimodal call
+    # without hurting chart legibility.
+    vision_model: str = "claude-sonnet-5"
     vision_max_image_width: int = 1500       # downscale wider images before send
     vision_resize_target_width: int = 1024   # post-resize width
     vision_cache_enabled: bool = True        # hash-dedupe identical bytes

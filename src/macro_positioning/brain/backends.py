@@ -202,14 +202,30 @@ def generate_anthropic(
         "cache_control": {"type": "ephemeral"},
     }]
 
-    t0 = time.time()
-    response = client.messages.create(
-        model=model_name,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=system_blocks,
-        messages=[{"role": "user", "content": content}],
+    # `temperature` (and other sampling params) are rejected on the 4.6+ family
+    # and every 5.x model — they return 400 "temperature is deprecated". Only
+    # send it for older models that still accept it.
+    _sampling_removed = (
+        "claude-sonnet-5" in model_name
+        or "claude-opus-5" in model_name
+        or "claude-fable-5" in model_name
+        or "claude-mythos-5" in model_name
+        or "claude-opus-4-6" in model_name
+        or "claude-opus-4-7" in model_name
+        or "claude-opus-4-8" in model_name
+        or "claude-sonnet-4-6" in model_name
     )
+    kwargs: dict = {
+        "model": model_name,
+        "max_tokens": max_tokens,
+        "system": system_blocks,
+        "messages": [{"role": "user", "content": content}],
+    }
+    if not _sampling_removed:
+        kwargs["temperature"] = temperature
+
+    t0 = time.time()
+    response = client.messages.create(**kwargs)
     latency = (time.time() - t0) * 1000
 
     text = ""

@@ -117,16 +117,31 @@ def main() -> int:
 
     def _prices():
         from macro_positioning.prices.fetcher import fetch_and_persist
+        from macro_positioning.prices.symbol_map import crypto_majors, resolve_symbol
         from macro_positioning.scoring.watchlist_resolver import resolve_watchlist
         resolved = resolve_watchlist(framework_regime="commodity_led_inflation")
         tickers = {e.ticker for e in resolved.entries}
+        # Macro-tape assets (Home page live prices) — keep them fresh daily so
+        # the tape doesn't go stale. See desk_data.build_live_prices_section.
+        tickers |= {"GC=F", "SI=F", "HG=F", "SPX", "NDX", "IWM", "DBA",
+                    "GLD", "SLV", "CPER"}
+        # Every crypto major, daily, whether or not anyone mentioned it. The
+        # channels call these constantly and a book cannot mark a position it
+        # has no bars for — BTC/ETH/SOL were hardcoded here, which is why ZEC
+        # and HYPE calls kept landing with no price history.
+        tickers |= set(crypto_majors())
         with sqlite3.connect(settings.sqlite_path) as c:
             for (t,) in c.execute(
                 "SELECT DISTINCT asset_ticker FROM signals "
                 "WHERE extracted_at >= datetime('now','-30 day')"
             ).fetchall():
-                if t:
-                    tickers.add(str(t).upper())
+                # Signal tickers are RAW: 'BTC/USDT', 'KINS/SOL', '牛来/USDT'.
+                # Sent to yfinance unresolved they fetch nothing at all, and
+                # the crypto half of the tape simply never had bars. Resolving
+                # maps the pair to its key and drops what cannot be priced.
+                key = resolve_symbol(str(t or ""))
+                if key:
+                    tickers.add(key)
         pr = fetch_and_persist(sorted(tickers), days=200)
         return f"{pr.tickers_with_data}/{pr.tickers_requested} tickers, {pr.bars_persisted} bars"
     summary["prices"] = _step("prices", _prices)
@@ -137,6 +152,82 @@ def main() -> int:
         s = extract_pending(limit=500, since_days=21, extractor_filter="insider_extractor")
         return f"{s.signals_written} signals"
     summary["insider_signals"] = _step("insider_signals", _insider_signals)
+
+    # Telegram-channel chart drops are projected from the manual/vision.py
+    # locked-prompt output into signals rows via manual_chart_extractor —
+    # no LLM cost, no vision cost, the extraction already ran at ingest.
+    def _manual_chart_signals():
+        from macro_positioning.signals.runner import extract_pending
+        s = extract_pending(limit=1000, since_days=21, extractor_filter="manual_chart_extractor")
+        # A silent zero here is indistinguishable from a healthy quiet day,
+        # and that is how three weeks of chart flow went missing once: the
+        # step logged `STEP OK 0 signals` twice a day while every chart
+        # since Sept 4 was an un-drained vision error. Count the backlog so
+        # the log says which of the two it is.
+        # Only charts that COULD still be read count. `not_a_chart` and
+        # `no_attachment` are answers, not a backlog — counting them would
+        # make the warning fire every day and mean nothing.
+        import json as _json
+
+        from macro_positioning.signals.manual_chart_extractor import (
+            _vision_failure_is_retryable,
+        )
+
+        stranded = 0
+        with sqlite3.connect(f"file:{settings.sqlite_path}?mode=ro", uri=True) as c:
+            rows = c.execute(
+                """
+                SELECT extracted_features_json FROM documents
+                WHERE content_type = 'manual_chart'
+                  AND published_at >= datetime('now', '-21 days')
+                  AND (extracted_features_json IS NULL
+                       OR json_extract(extracted_features_json, '$.ticker') IS NULL)
+                """
+            ).fetchall()
+        for (raw,) in rows:
+            if not raw:
+                stranded += 1          # never drained at all
+                continue
+            try:
+                feat = _json.loads(raw) or {}
+            except (TypeError, ValueError):
+                stranded += 1
+                continue
+            if _vision_failure_is_retryable(feat):
+                stranded += 1
+        if stranded:
+            log.warning(
+                "manual_chart_signals: %d chart docs in the last 21d have no usable "
+                "vision output — the drainer is behind or failing, so these produce "
+                "no signals and the cohort book cannot see them",
+                stranded,
+            )
+        return f"{s.signals_written} signals, {stranded} charts stranded without vision"
+    summary["manual_chart_signals"] = _step("manual_chart_signals", _manual_chart_signals)
+
+    # The measurement loop. `backtest_calls` re-scores every chart call
+    # against the tape; `recompute_trust_from_outcomes` turns the result
+    # into the trust weight the desk blends with. Both are free — yfinance
+    # plus the DB, no model calls — and both belong on a schedule because
+    # the failure mode is silent: the backtest last ran 2026-06-09 and by
+    # 2026-09-22 the cohort book was still sizing Big_Nuts up on a +3.8%
+    # alpha that had decayed to -2.5% over twice the sample.
+    def _backtest():
+        from macro_positioning.learning.call_accuracy import backtest_calls
+        r = backtest_calls()
+        return (f"{r['scored']} scored, {r['unpriceable']} unpriceable, "
+                f"{r['symbols_loaded']} symbols")
+    summary["call_backtest"] = _step("call_backtest", _backtest)
+
+    def _trust():
+        from macro_positioning.learning.trust_from_outcomes import (
+            recompute_trust_from_outcomes,
+        )
+        run = recompute_trust_from_outcomes()
+        for line in run.report().splitlines()[1:]:
+            log.info("trust: %s", line.strip())
+        return f"{run.updated} weights moved of {run.considered} measured"
+    summary["trust_weights"] = _step("trust_weights", _trust)
 
     def _scoring():
         from macro_positioning.scoring.runner import run_scoring_pass

@@ -31,8 +31,11 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
+import subprocess
+import sys
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -606,6 +609,64 @@ async def _ingest_bundle(
     return "imported"
 
 
+# ── Stock Unlocked: push-driven ledger + book ───────────────────────────────
+
+
+STOCK_UNLOCKED_SLUG = "stock_unlocked"
+
+
+def push_stock_unlocked(
+    base_dir: Path, *, run_book: bool = True, runner=None, timeout: float = 600.0
+) -> dict:
+    """Bring the Stock Unlocked ledger current, then run the copy book.
+
+    Called from the listener the moment the desk posts. Module level and
+    injectable because this is the path that places trades off a push —
+    it needs a test, and a closure inside `listen()` cannot have one.
+
+    Never raises: the caller is a Telethon event handler, and losing the
+    listener costs far more than losing one tick.
+    """
+    report: dict = {"synced": None, "book": None, "error": None}
+    try:
+        from macro_positioning.tracker import stock_unlocked as su_tracker
+
+        report["synced"] = su_tracker.sync()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("stock-unlocked tracker sync failed")
+        report["error"] = f"sync: {exc}"
+        return report
+    if not run_book:
+        report["book"] = "skipped"
+        return report
+
+    run = runner or subprocess.run
+    script = Path(base_dir) / "scripts" / "paper_unlocked_tick.py"
+    try:
+        # --no-sync: the ledger is already current from the sync above.
+        # Subprocess, not an import: identical to what launchd runs, and a
+        # failure in the engine cannot take the Telethon session with it.
+        proc = run(
+            [sys.executable, str(script), "--execute", "--quiet", "--no-sync"],
+            cwd=str(base_dir), capture_output=True, text=True, timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 — includes TimeoutExpired
+        logger.exception("stock-unlocked book tick failed")
+        report["error"] = f"book: {exc}"
+        return report
+
+    if proc.returncode != 0:
+        logger.error("stock-unlocked book tick exited %s: %s",
+                     proc.returncode, (proc.stderr or "").strip()[-400:])
+        report["book"] = f"exit {proc.returncode}"
+    else:
+        lines = (proc.stdout or "").strip().splitlines()
+        if lines:
+            logger.info("stock-unlocked book tick: %s", " | ".join(lines[-6:]))
+        report["book"] = "ok"
+    return report
+
+
 # ── Backfill mode ───────────────────────────────────────────────────────────
 
 
@@ -749,9 +810,48 @@ async def listen(channel_slugs: list[str]) -> None:
         except Exception:  # noqa: BLE001 — never kill the listener on a drain error
             logger.exception("auto-extract drain failed")
 
-    def _schedule_extract(outcome: str) -> None:
-        if outcome == "imported":
-            asyncio.create_task(asyncio.to_thread(_drain_blocking))
+    # ── Stock Unlocked: the desk posts, the desk gets followed ──────────
+    #
+    # This channel states its levels in words, so its ledger is a regex
+    # parse away — and it has to be immediate. ENA was called at 23:50 on
+    # 2026-09-24 and printed its first target 62 minutes later; the
+    # two-hourly jobs meant the ledger did not contain the call while it
+    # was live and the copy book never saw it. This listener already holds
+    # an open connection and fires the moment a message lands, so the
+    # whole chain hangs off that event instead of a clock.
+    #
+    # Ledger first, in-process (fast, and it keeps the page current even
+    # if the book is off). Then the book, as a SUBPROCESS running the same
+    # script launchd runs: one code path, and a failure in the engine
+    # cannot take the listener's Telethon session down with it.
+    #
+    # Debounced, because the desk posts in bursts — an entry, then three
+    # target updates inside a minute. One pass once the burst settles.
+    _SU_DEBOUNCE_SECONDS = 20.0
+    _su_pulse: dict[str, Optional[asyncio.Task]] = {"task": None}
+    # Kill switch: the book places (paper) trades off a push, so it must be
+    # possible to turn that off without editing code or stopping ingest.
+    _su_push_trades = os.environ.get("MPA_UNLOCKED_PUSH_TICK", "1") != "0"
+
+    def _su_sync_and_trade_blocking() -> None:
+        push_stock_unlocked(base_dir, run_book=_su_push_trades)
+
+    async def _su_pulse_after_burst() -> None:
+        try:
+            await asyncio.sleep(_SU_DEBOUNCE_SECONDS)
+        except asyncio.CancelledError:
+            return                      # a newer post restarted the timer
+        await asyncio.to_thread(_su_sync_and_trade_blocking)
+
+    def _schedule_extract(outcome: str, slug: Optional[str] = None) -> None:
+        if outcome != "imported":
+            return
+        asyncio.create_task(asyncio.to_thread(_drain_blocking))
+        if slug == "stock_unlocked":
+            pending = _su_pulse.get("task")
+            if pending and not pending.done():
+                pending.cancel()
+            _su_pulse["task"] = asyncio.create_task(_su_pulse_after_burst())
 
     async def _flush_album(chat_id: int, gid: int, after_seconds: float = 2.0) -> None:
         await asyncio.sleep(after_seconds)
@@ -764,7 +864,7 @@ async def listen(channel_slugs: list[str]) -> None:
         try:
             outcome = await _ingest_bundle(msgs, chat_id, slug, cfg, base_dir, db_path)
             logger.info("album %s/%s → %s (n=%d)", chat_id, gid, outcome, len(msgs))
-            _schedule_extract(outcome)
+            _schedule_extract(outcome, slug)
         except Exception:  # noqa: BLE001
             logger.exception("album ingest failure %s/%s", chat_id, gid)
 
@@ -787,7 +887,7 @@ async def listen(channel_slugs: list[str]) -> None:
         try:
             outcome = await _ingest_bundle([m], chat_id, slug, cfg, base_dir, db_path)
             logger.info("msg %s/%s → %s", chat_id, m.id, outcome)
-            _schedule_extract(outcome)
+            _schedule_extract(outcome, slug)
         except Exception:  # noqa: BLE001
             logger.exception("standalone ingest failure %s/%s", chat_id, m.id)
 
