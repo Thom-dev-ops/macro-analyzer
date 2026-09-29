@@ -88,3 +88,13 @@ data/rescue/
 data/recovery/
 *.db.pid*
 *.db.pre-guardtest-recovery
+
+# Chart Lab intake — charts are data, not source
+chart-inbox/
+
+# Rendered brief HTML (scripts/build_brief.py output) — generated, 36MB
+/briefs/
+
+# Local .env copies kept while switching profiles — secrets, never commit
+.env.bak*
+.env.*.bak
