@@ -107,6 +107,18 @@ class Mandate:
     # hard limit. Options would carry their own; the book only trades spot.
     max_stop_pct: float = 0.05
 
+    # ── Whose stop is it? ────────────────────────────────────────────────
+    # The signal book manages its own risk: the ladder ratchets the stop to
+    # breakeven, an add tightens it, and the exit runs off the twice-daily
+    # mark. The COHORT book is a copy-trader, and a copy-trader that moves
+    # the author's stop is no longer measuring the author. With this set:
+    #   · the stop is the level the author drew and the engine never
+    #     rewrites it (no breakeven ratchet, no tighten on an add);
+    #   · it is treated as a RESTING order — it fires on the traded range
+    #     since the last tick, not only on the mark, and fills AT the stop.
+    # Off by default: only a book following someone else's calls wants it.
+    author_stops_only: bool = False
+
     # Bumped when the meaning of the numbers changes, not their values.
     # A mandate stored under an older scale cannot be read on this one.
     scale: str = SCALE
@@ -203,6 +215,9 @@ class Mandate:
             fee_bps=float(exe.get("fee_bps", d.fee_bps)),
             min_stop_pct=float(sizing.get("min_stop_pct", d.min_stop_pct)),
             max_stop_pct=float(sizing.get("max_stop_pct", d.max_stop_pct)),
+            author_stops_only=bool(
+                exits.get("author_stops_only", d.author_stops_only)
+            ),
             scale=str(raw.get("scale") or SCALE),
         )
 
@@ -254,6 +269,7 @@ class Mandate:
             "feeBps": self.fee_bps,
             "minStopPct": self.min_stop_pct,
             "maxStopPct": self.max_stop_pct,
+            "authorStopsOnly": self.author_stops_only,
             "scale": self.scale,
         }
 
@@ -341,6 +357,9 @@ class Mandate:
             fee_bps=float(d.get("feeBps", base.fee_bps)),
             min_stop_pct=float(d.get("minStopPct", base.min_stop_pct)),
             max_stop_pct=float(d.get("maxStopPct", base.max_stop_pct)),
+            author_stops_only=bool(
+                d.get("authorStopsOnly", base.author_stops_only)
+            ),
             scale=str(d.get("scale") or SCALE),
         )
 

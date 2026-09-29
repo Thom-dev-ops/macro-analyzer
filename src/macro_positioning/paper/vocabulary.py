@@ -162,6 +162,11 @@ class Intent(_Described):
         "manual_override",
         "{ticker} closed by hand from the desk — engine decision overridden",
     )
+    BOOK_RETIRED = (
+        "book_retired",
+        "{ticker} closed at {price} — its book was retired and would never tick "
+        "again, so the position was flattened rather than left unmanaged",
+    )
 
     # ── Non-events ────────────────────────────────────────────────────
     NO_CHANGE = (

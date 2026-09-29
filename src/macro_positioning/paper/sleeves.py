@@ -31,11 +31,13 @@ from pathlib import Path
 from typing import Optional
 
 from macro_positioning.core.settings import settings
+from macro_positioning.prices.symbol_map import coinbase_tradeable, crypto_majors
 
 
 SLEEVES_PATH = "config/paper_sleeves.json"
 THEMES_PATH = "config/asset_themes.json"
 BUCKETS_PATH = "config/correlation_buckets.json"
+SECTORS_PATH = "config/ticker_sectors.json"
 
 UNCLASSIFIED = "unclassified"
 
@@ -79,12 +81,63 @@ def _load(path: str, override: Optional[Path] = None) -> dict:
         return {}
 
 
+# Quote legs that mark a key as a crypto pair rather than an equity. A
+# resolved key arrives here in one of three shapes — bare ('ETH'), the
+# yfinance form for a non-major coin ('AERO-USD'), or the raw pair the
+# KOL layer writes ('SOL/USDT') — and all three name the same asset.
+_QUOTE_LEGS = frozenset({"USD", "USDT", "USDC", "BUSD", "TUSD", "PERP"})
+
+
+def base_key(ticker: str) -> str:
+    """The bare asset a ticker names, whatever shape it arrived in.
+
+    'SOL/USDT' -> 'SOL', 'AERO-USD' -> 'AERO', 'BRK-B' -> 'BRK-B'
+    (the tail is not a quote leg, so it is a hyphenated equity and is
+    left alone), 'NVDA' -> 'NVDA'.
+    """
+    t = str(ticker or "").upper().strip()
+    if not t:
+        return ""
+    t = t.split("/")[0].strip()
+    for sep in ("-", "_"):
+        head, found, tail = t.partition(sep)
+        if found and tail in _QUOTE_LEGS:
+            return head
+    return t
+
+
+@lru_cache(maxsize=1)
+def _sector_index() -> dict[str, dict]:
+    """ticker -> {name, sector, industry}, from config/ticker_sectors.json.
+
+    The hand-written membership in `paper_sleeves.json` is an allowlist
+    of names this desk already had an opinion about — index ETFs, the
+    megacaps, the thematic baskets. The copy books trade whatever their
+    channel posts, which is mostly small-cap momentum nobody wrote down,
+    and every one of those landed in `unclassified` for no better reason
+    than that nobody had typed it in yet. This file closes that gap: a
+    ticker with a known sector resolves through `$sector_fallback` below
+    instead of falling out of the attribution entirely.
+
+    Refresh with scripts/refresh_ticker_sectors.py --write.
+    """
+    return {
+        str(k).upper(): v
+        for k, v in ((_load(SECTORS_PATH).get("tickers") or {}).items())
+        if isinstance(v, dict)
+    }
+
+
+def reset_sector_cache() -> None:
+    _sector_index.cache_clear()
+
+
 @lru_cache(maxsize=1)
 def _taxonomy(
     sleeves_path: Optional[str] = None,
     themes_path: Optional[str] = None,
     buckets_path: Optional[str] = None,
-) -> tuple[tuple[Sleeve, ...], dict[str, str]]:
+) -> tuple[tuple[Sleeve, ...], dict[str, str], dict[str, dict[str, str]]]:
     """Build the ordered sleeve list and the ticker → sleeve_id index."""
     cfg = _load(SLEEVES_PATH, Path(sleeves_path) if sleeves_path else None)
     themes = (_load(THEMES_PATH, Path(themes_path) if themes_path else None)
@@ -106,6 +159,16 @@ def _taxonomy(
             }
         for b in spec.get("buckets") or []:
             members |= {t.upper() for t in ((buckets.get(b) or {}).get("members") or [])}
+        # Crypto membership is not written down here. It comes from
+        # config/crypto_universe.json, which a Coinbase listing change
+        # already updates through scripts/refresh_crypto_universe.py —
+        # retyping forty coins into a second file would only guarantee
+        # the two disagree the first time one of them moved.
+        universe = spec.get("crypto_universe")
+        if universe == "majors":
+            members |= set(crypto_majors())
+        elif universe == "coinbase":
+            members |= set(coinbase_tradeable())
         members |= {t.upper() for t in (spec.get("tickers") or [])}
 
         class_id = spec.get("class") or "other"
@@ -124,12 +187,18 @@ def _taxonomy(
         for t in members:
             index.setdefault(t, sleeve.id)
 
-    return tuple(ordered), index
+    fb = cfg.get("$sector_fallback") or {}
+    fallback = {
+        "by_industry": {str(k): v for k, v in (fb.get("by_industry") or {}).items()},
+        "by_sector": {str(k): v for k, v in (fb.get("by_sector") or {}).items()},
+    }
+    return tuple(ordered), index, fallback
 
 
 def reset_cache() -> None:
     """Drop the cached taxonomy. Used in tests and after editing the config."""
     _taxonomy.cache_clear()
+    _sector_index.cache_clear()
 
 
 def all_sleeves() -> tuple[Sleeve, ...]:
@@ -137,21 +206,43 @@ def all_sleeves() -> tuple[Sleeve, ...]:
 
 
 def sleeve_for_ticker(ticker: str) -> Sleeve:
-    """Resolve a ticker to its sleeve. Unmapped tickers report as
-    `unclassified` rather than being quietly folded somewhere plausible —
-    a big unclassified bucket is a to-do, and hiding it loses that."""
+    """Resolve a ticker to its sleeve.
+
+    Three passes, narrowest evidence first: the declared membership, then
+    the ticker's own sector where `config/ticker_sectors.json` knows it,
+    then `unclassified`. The last is still reported honestly rather than
+    folded somewhere plausible — a big unclassified bucket is a to-do,
+    and hiding it loses that — but it should now mean "nothing anywhere
+    knows this name", not "nobody typed it in".
+    """
     if not ticker:
         return UNCLASSIFIED_SLEEVE
-    ordered, index = _taxonomy()
-    # Crypto pairs arrive as "SOL/USD" or "BTC/USDT" from the KOL layer.
-    base = str(ticker).upper().split("/")[0].strip()
+    ordered, index, fallback = _taxonomy()
+    # Crypto arrives as "SOL/USD", "BTC/USDT" or the resolved "AERO-USD".
+    base = base_key(ticker)
     sleeve_id = index.get(base)
+    if sleeve_id is None:
+        sleeve_id = _sleeve_from_sector(base, fallback)
     if sleeve_id is None:
         return UNCLASSIFIED_SLEEVE
     for s in ordered:
         if s.id == sleeve_id:
             return s
     return UNCLASSIFIED_SLEEVE
+
+
+def _sleeve_from_sector(base: str, fallback: dict[str, dict[str, str]]) -> Optional[str]:
+    """Industry first, sector second. Industry is the one that carries the
+    thesis — "Aerospace & Defense" is a defense name whether the screener
+    filed it under Industrials or Technology, and "Other Industrial Metals
+    & Mining" is the critical-minerals trade while its parent sector,
+    Basic Materials, also holds the gold miners."""
+    row = _sector_index().get(base)
+    if not row:
+        return None
+    industry = str(row.get("industry") or "")
+    sector = str(row.get("sector") or "")
+    return fallback["by_industry"].get(industry) or fallback["by_sector"].get(sector)
 
 
 def classes() -> dict[str, str]:
@@ -171,11 +262,9 @@ def coverage(tickers: list[str]) -> dict:
     the performance endpoint so an unmapped name is visible rather than
     silently diluting a sleeve's numbers."""
     unmapped = sorted({
-        str(t).upper().split("/")[0]
-        for t in tickers
-        if sleeve_for_ticker(t).id == UNCLASSIFIED
+        base_key(t) for t in tickers if sleeve_for_ticker(t).id == UNCLASSIFIED
     })
-    total = len({str(t).upper().split("/")[0] for t in tickers})
+    total = len({base_key(t) for t in tickers})
     return {
         "total": total,
         "classified": total - len(unmapped),
@@ -186,5 +275,5 @@ def coverage(tickers: list[str]) -> dict:
 
 __all__ = [
     "Sleeve", "sleeve_for_ticker", "all_sleeves", "classes", "regimes_of",
-    "coverage", "reset_cache", "UNCLASSIFIED",
+    "coverage", "reset_cache", "reset_sector_cache", "base_key", "UNCLASSIFIED",
 ]

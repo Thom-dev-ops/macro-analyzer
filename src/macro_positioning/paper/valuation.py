@@ -62,7 +62,7 @@ class Evidence:
     """One view's verdict on the trade, with the numbers behind it."""
 
     view: str        # structure | trusted_voices | regime | price_action
-    stance: str      # supports | neutral | opposes | absent
+    stance: str      # supports | neutral | opposes | stale | absent
     delta: float     # rank points this view contributes
     detail: str      # the sentence the decision log renders
     data: dict = field(default_factory=dict)
@@ -189,12 +189,13 @@ def _structure_view(
 
 
 def _voices_view(
-    *, side: str, target: Optional[float], atr: float, kol,
+    *, side: str, entry: float, target: Optional[float], atr: float, kol,
 ) -> tuple[Evidence, Optional[float]]:
     """Do the trusted voices agree on where this goes?
 
     Returns the consensus target when it is worth adopting — a fresh,
-    trusted cluster that the agent's own target is within reach of.
+    trusted cluster that the agent's own target is within reach of, and
+    that still sits ahead of the trade.
     """
     if kol is None or getattr(kol, "target", None) is None:
         return (
@@ -213,6 +214,22 @@ def _voices_view(
     data = {"consensus": cons.price, "contributors": n, "trusted": cons.trusted,
             "weight": round(cons.weight, 3), "gapAtr": round(gap_atr, 2) if gap_atr else None,
             "who": cons.basis}
+
+    # Ahead of the trade, or behind it? A target on the wrong side of
+    # entry is not a more conservative read of the same move — it is a
+    # level this trade would have to LOSE money to reach. The comparison
+    # below only asks whether the voices see less upside than the chart,
+    # which a played-out call passes trivially, so it is gated here
+    # before any branch can hand the price back.
+    d = 1.0 if side == "LONG" else -1.0
+    if (cons.price - entry) * d <= 0:
+        return (
+            Evidence("trusted_voices", "stale", 0.0,
+                     f"{n} trusted voice(s) target {cons.price:g}, behind the "
+                     f"{entry:g} entry — that call has already played out",
+                     data),
+            None,
+        )
 
     if not cons.trusted:
         return (
@@ -343,7 +360,7 @@ def valuate(
     ev.append(struct_ev)
 
     voices_ev, voice_target = _voices_view(
-        side=side, target=target, atr=atr, kol=kol
+        side=side, entry=entry, target=target, atr=atr, kol=kol
     )
     ev.append(voices_ev)
     ev.append(_regime_view(macro_score=macro_score, regime_label=regime_label))
@@ -382,12 +399,21 @@ def valuate(
     if composed is not None and stop is not None and entry:
         risk = abs(entry - stop)
         if risk > 0:
-            rr = abs(composed - entry) / risk
+            # Signed, deliberately. `abs()` here read a target BEHIND the
+            # entry as positive reward, which is exactly how a played-out
+            # call presented itself as a tradeable 0.2R instead of a
+            # negative one.
+            rr = ((composed - entry) * (1.0 if side == "LONG" else -1.0)) / risk
 
     blockers: list[str] = []
     if support < min_support:
         blockers.append(
             f"target support {support:.0f}/100 is under the {min_support:.0f} bar"
+        )
+    if rr is not None and rr <= 0:
+        blockers.append(
+            f"composed target {composed:g} sits behind the {entry:g} entry — "
+            "there is no trade in that direction"
         )
     if composed is not None and atr > 0 and abs(composed - entry) / atr < _MIN_TARGET_ATR:
         blockers.append(
@@ -458,10 +484,12 @@ def valuate_reads(
             structure = None
             atr = 0.0
             ret_20d = None
+            close = None
             try:
                 bars = load_recent_prices(read.ticker, days=200, conn=conn)
                 feats = compute_technical_features(bars)
                 atr = float(feats.get("atr14") or 0.0)
+                close = float(feats.get("close") or 0.0) or None
                 structure = build_structure(bars, atr)
                 if len(bars) >= 21 and bars[-21].close:
                     ret_20d = (bars[-1].close - bars[-21].close) / bars[-21].close
@@ -470,7 +498,9 @@ def valuate_reads(
 
             kol = None
             try:
-                kol = kol_levels_for_ticker(conn, read.ticker, atr=atr, weights=weights)
+                kol = kol_levels_for_ticker(
+                    conn, read.ticker, atr=atr, weights=weights, close=close,
+                )
             except Exception as exc:
                 logger.debug("kol levels unavailable for %s: %s", read.ticker, exc)
 

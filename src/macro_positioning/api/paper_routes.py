@@ -153,7 +153,9 @@ def _gloss(row: dict) -> Optional[str]:
         target_weight_pct=row.get("target_weight_pct") or 0.0,
         weight_pct=row.get("current_weight_pct") or 0.0,
         from_pct=row.get("current_weight_pct") or 0.0,
-        score=(row.get("rationale") or {}).get("rank", {}).get("score") or "",
+        # `rationale.rank` is present-but-null on a HOLD row for a name that
+        # had no read this tick, so the key lookup alone is not enough.
+        score=((row.get("rationale") or {}).get("rank") or {}).get("score") or "",
     )
     return None if "{" in text else text
 
@@ -165,12 +167,20 @@ def get_decisions(
     ticker: Optional[str] = None,
     action: Optional[str] = None,
     executed_only: bool = False,
+    position_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """The decision log. Every row explains itself."""
+    """The decision log. Every row explains itself.
+
+    `position_id` narrows the log to one position's whole life — the OPEN,
+    every ADD and TRIM, and the EXIT. The log's own view is filtered to a
+    single action at a time, which means a trade's arc is never visible in
+    it: a half taken off at target and the stop-out that followed sit
+    under different chips and, on a busy book, thousands of rows apart.
+    """
     pf = _book_or_404(portfolio_id)
     rows = store.recent_decisions(
         pf.portfolio_id, limit=limit, ticker=ticker, action=action,
-        executed_only=executed_only,
+        executed_only=executed_only, position_id=position_id,
     )
     for r in rows:
         # Attach the vocabulary's own gloss, rendered against this row's
@@ -179,6 +189,23 @@ def get_decisions(
         # slots is dropped rather than shown half-rendered.
         r["intentMeaning"] = _gloss(r)
         r["isFill"] = bool(r["executed"])
+    if position_id:
+        # An arc is read for its prices — "trimmed half" means little
+        # without the level it was trimmed at — so the fill rides along
+        # rather than costing the caller a second round trip.
+        fills = {
+            o["order_id"]: o
+            for o in store.recent_orders(
+                pf.portfolio_id, limit=200, position_id=position_id,
+            )
+        }
+        for r in rows:
+            o = fills.get(r.get("order_id"))
+            if o:
+                r["fill"] = {
+                    "qty": o["qty"], "price": o["price"],
+                    "notional": o["notional"], "realizedPnl": o["realized_pnl"],
+                }
     return {"decisions": rows, "count": len(rows)}
 
 
@@ -194,12 +221,13 @@ def get_orders(
 
 @router.get("/equity-curve")
 def get_equity_curve(
-    portfolio_id: Optional[str] = None, limit: int = Query(400, ge=2, le=2000)
+    portfolio_id: Optional[str] = None, limit: int = Query(400, ge=2, le=2000),
+    daily: bool = Query(False),
 ) -> dict[str, Any]:
     pf = _book_or_404(portfolio_id)
     return {
         "startingEquity": pf.starting_equity,
-        "points": store.equity_curve(pf.portfolio_id, limit=limit),
+        "points": store.equity_curve(pf.portfolio_id, limit=limit, daily=daily),
     }
 
 

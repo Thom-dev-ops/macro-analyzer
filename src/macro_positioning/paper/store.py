@@ -143,9 +143,21 @@ def create_portfolio(
 def get_portfolio(
     portfolio_id: Optional[str] = None, *, db_path: Optional[Path] = None
 ) -> Optional[Portfolio]:
-    """Fetch a book by id, or the oldest active one when id is omitted.
-    The desk runs a single book; the id parameter exists so a what-if
-    book can be run beside it without a schema change."""
+    """Fetch a book by id, or THE SIGNAL BOOK when id is omitted.
+
+    This used to mean "the oldest active book", which was true for as long
+    as the desk ran one. It stopped being true the day a second book was
+    opened, and broke outright when the Stock Unlocked book was replayed
+    over a year of history: the replay backdated its `created_at`, so it
+    became the oldest active row, and every caller that omitted an id —
+    `paper_trading_tick.py` and every `/api/paper/*` read — silently
+    switched to it. The signal book went six days without trading while
+    its tick filled desk-score candidates into the copy book, under the
+    copy book's mandate.
+
+    Resolving by NAME makes the default mean what every caller assumed it
+    meant. Age is the fallback only for a DB whose single book was renamed.
+    """
     with connect(db_path, readonly=True) as conn:
         if portfolio_id:
             row = conn.execute(
@@ -153,6 +165,10 @@ def get_portfolio(
             ).fetchone()
         else:
             row = conn.execute(
+                "SELECT * FROM paper_portfolios WHERE status = 'active' AND name = ? "
+                "ORDER BY created_at ASC LIMIT 1",
+                (DEFAULT_BOOK_NAME,),
+            ).fetchone() or conn.execute(
                 "SELECT * FROM paper_portfolios WHERE status = 'active' "
                 "ORDER BY created_at ASC LIMIT 1"
             ).fetchone()
@@ -391,6 +407,7 @@ def recent_price_exits(
 
 def recent_orders(
     portfolio_id: str, *, limit: int = 100, ticker: Optional[str] = None,
+    position_id: Optional[str] = None,
     db_path: Optional[Path] = None,
 ) -> list[dict]:
     sql = "SELECT * FROM paper_orders WHERE portfolio_id = ?"
@@ -398,6 +415,9 @@ def recent_orders(
     if ticker:
         sql += " AND ticker = ?"
         params.append(ticker.upper())
+    if position_id:
+        sql += " AND position_id = ?"
+        params.append(position_id)
     sql += " ORDER BY filled_at DESC LIMIT ?"
     params.append(limit)
     with connect(db_path, readonly=True) as conn:
@@ -439,6 +459,7 @@ def insert_decision(conn: sqlite3.Connection, d: Decision) -> None:
 def recent_decisions(
     portfolio_id: str, *, limit: int = 200, ticker: Optional[str] = None,
     action: Optional[str] = None, executed_only: bool = False,
+    position_id: Optional[str] = None,
     db_path: Optional[Path] = None,
 ) -> list[dict]:
     sql = "SELECT * FROM paper_decisions WHERE portfolio_id = ?"
@@ -446,6 +467,9 @@ def recent_decisions(
     if ticker:
         sql += " AND ticker = ?"
         params.append(ticker.upper())
+    if position_id:
+        sql += " AND position_id = ?"
+        params.append(position_id)
     if action:
         sql += " AND action = ?"
         params.append(action.upper())
@@ -536,20 +560,43 @@ def position_snapshots(
 
 
 def equity_curve(
-    portfolio_id: str, *, limit: int = 500, db_path: Optional[Path] = None
+    portfolio_id: str, *, limit: int = 500, daily: bool = False,
+    db_path: Optional[Path] = None,
 ) -> list[dict]:
+    """The most recent `limit` snapshots, oldest first. `daily=True` keeps
+    one per calendar day (the last) — a book ticking every two hours, or
+    one replayed over a year of history, would otherwise show only its
+    last few weeks inside any sane limit."""
     with connect(db_path, readonly=True) as conn:
-        rows = conn.execute(
-            """
-            SELECT snapshot_id, taken_at, equity, cash, deployed, deployed_pct,
-                   cash_pct, open_positions, unrealized_pnl, realized_pnl_to_date
-              FROM paper_equity_snapshots
-             WHERE portfolio_id = ?
-             ORDER BY taken_at DESC
-             LIMIT ?
-            """,
-            (portfolio_id, limit),
-        ).fetchall()
+        if daily:
+            rows = conn.execute(
+                """
+                SELECT snapshot_id, taken_at, equity, cash, deployed, deployed_pct,
+                       cash_pct, open_positions, unrealized_pnl, realized_pnl_to_date
+                  FROM paper_equity_snapshots
+                 WHERE portfolio_id = ?
+                   AND snapshot_id IN (
+                       SELECT snapshot_id FROM paper_equity_snapshots s2
+                        WHERE s2.portfolio_id = paper_equity_snapshots.portfolio_id
+                          AND date(s2.taken_at) = date(paper_equity_snapshots.taken_at)
+                        ORDER BY s2.taken_at DESC LIMIT 1)
+                 ORDER BY taken_at DESC
+                 LIMIT ?
+                """,
+                (portfolio_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT snapshot_id, taken_at, equity, cash, deployed, deployed_pct,
+                       cash_pct, open_positions, unrealized_pnl, realized_pnl_to_date
+                  FROM paper_equity_snapshots
+                 WHERE portfolio_id = ?
+                 ORDER BY taken_at DESC
+                 LIMIT ?
+                """,
+                (portfolio_id, limit),
+            ).fetchall()
     return [dict(r) for r in reversed(rows)]
 
 
@@ -560,6 +607,117 @@ def realized_to_date(portfolio_id: str, *, db_path: Optional[Path] = None) -> fl
             (portfolio_id,),
         ).fetchone()
     return float(row[0] or 0.0)
+
+
+# ── Retiring a book ───────────────────────────────────────────────────
+
+
+def flatten_portfolio(
+    portfolio_id: str,
+    *,
+    reason: str,
+    mark_fn: Optional[Any] = None,
+    db_path: Optional[Path] = None,
+) -> list[Order]:
+    """Close every open position in a book and return the exit fills.
+
+    A book that stops ticking does not stop *holding*. Its positions keep
+    `status='open'` while nothing enforces their stops or targets, so they
+    drift as unmanaged claims on the desk's numbers and quietly poison any
+    read that counts open risk. Retiring a book must therefore flatten it
+    first — the book closes flat or it does not close.
+
+    Positions are marked out at `mark_fn(ticker)` when a live price is
+    available, else the last mark the engine saw, else the entry. Each exit
+    writes an EXIT order (so `reconcile()` still rebuilds cash from the fill
+    log) and a Decision carrying `reason`, so the flatten is auditable
+    rather than a silent status flip.
+    """
+    fills: list[Order] = []
+    with connect(db_path) as conn:
+        pf = conn.execute(
+            "SELECT cash FROM paper_portfolios WHERE portfolio_id = ?", (portfolio_id,)
+        ).fetchone()
+        if not pf:
+            return fills
+        cash = float(pf["cash"])
+        rows = conn.execute(
+            "SELECT * FROM paper_positions WHERE portfolio_id = ? AND status = 'open'",
+            (portfolio_id,),
+        ).fetchall()
+        if not rows:
+            return fills
+
+        stamp = _now()
+        tick_id = new_tick_id()
+        for r in rows:
+            pos = _row_to_position(r)
+            if pos.qty <= 1e-12:
+                continue
+            price = None
+            if mark_fn is not None:
+                try:
+                    price = mark_fn(pos.ticker)
+                except Exception:          # a dead feed must not strand the book
+                    price = None
+            price = float(price or pos.last_mark or pos.avg_price)
+            is_long = pos.is_long
+            qty = pos.qty
+            notional = abs(qty * price)
+            realized = (price - pos.avg_price) * qty * (1.0 if is_long else -1.0)
+            cash_delta = notional if is_long else -notional
+
+            pos.qty = 0.0
+            pos.status = "closed"
+            pos.closed_at = stamp
+            pos.realized_pnl += realized
+            pos.last_mark = price
+            pos.last_mark_at = stamp
+            update_position(conn, pos)
+
+            order = Order(
+                order_id=new_order_id(),
+                portfolio_id=portfolio_id,
+                ticker=pos.ticker,
+                action=Action.EXIT,
+                side=pos.side,
+                qty=round(qty, 10),
+                price=price,
+                notional=round(notional, 6),
+                cash_delta=round(cash_delta, 6),
+                intent=Intent.BOOK_RETIRED,
+                filled_at=stamp,
+                position_id=pos.position_id,
+                tick_id=tick_id,
+                ref_price=price,
+                realized_pnl=round(realized, 6),
+                rationale=reason,
+                price_source="flatten",
+            )
+            insert_order(conn, order)
+            cash += cash_delta
+            fills.append(order)
+
+            insert_decision(conn, Decision(
+                decision_id=new_decision_id(),
+                portfolio_id=portfolio_id,
+                tick_id=tick_id,
+                decided_at=stamp,
+                ticker=pos.ticker,
+                action=Action.EXIT,
+                intent=Intent.BOOK_RETIRED,
+                headline=f"{pos.ticker} flattened at {price:,.4f} — {reason}",
+                side=pos.side,
+                notional=round(notional, 6),
+                executed=True,
+                position_id=pos.position_id,
+                order_id=order.order_id,
+                rationale={"reason": reason, "realized_pnl": round(realized, 6)},
+            ))
+
+        update_portfolio_cash(conn, portfolio_id, cash, tick_at=stamp)
+        conn.commit()
+    return fills
 
 
 # ── Reconciliation ────────────────────────────────────────────────────

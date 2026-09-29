@@ -128,7 +128,7 @@ function Paper() {
 
 // ── Book header ───────────────────────────────────────────────────────
 
-function BookHeader({ book }) {
+function BookHeader({ book, cadence = "06:15 · 13:15 daily" }) {
   // The cash meter fills toward the 70% ceiling. Amber inside the last
   // five points of headroom, red if the floor has been breached — which
   // should only ever be transient, between a mark and the next tick.
@@ -177,7 +177,7 @@ function BookHeader({ book }) {
         <div className="kpi-val mono" style={{ fontSize: "1.05rem" }}>
           {book.lastTickAt ? String(book.lastTickAt).slice(5, 16).replace("T", " ") : "never"}
         </div>
-        <div className="kpi-sub">06:15 · 13:15 daily</div>
+        <div className="kpi-sub">{cadence}</div>
       </div>
     </div>
   );
@@ -690,8 +690,15 @@ function DecisionDetail({ d }) {
   const horizon = r.horizon || null;
   const path = r.exitPath || null;
 
+  // The grid has to count the columns that will actually render, or the
+  // last one wraps under the first and reads as a second row of the same
+  // panel. Two are unconditional; the rest earn their place.
+  const columns = 2 + (comp ? 1 : 0)
+    + ((book || horizon || path) ? 1 : 0)
+    + (d.position_id ? 1 : 0);
+
   return (
-    <div className={`pd-detail ${(comp && (book || horizon)) ? "wider" : comp ? "wide" : ""}`}>
+    <div className={`pd-detail ${columns >= 4 ? "wider" : columns === 3 ? "wide" : ""}`}>
       <div className="pdd-col">
         <div className="pdd-h">Why this rank</div>
         {comps.length ? (
@@ -812,6 +819,63 @@ function DecisionDetail({ d }) {
           )}
         </dl>
         <div className="pdd-intent muted">{d.intent} — {d.intentMeaning}</div>
+      </div>
+
+      {d.position_id && <PositionArc d={d} />}
+    </div>
+  );
+}
+
+// The whole life of one position, shown on every row that belongs to it.
+//
+// The log filters to a single action at a time and caps at 250 rows, so a
+// trade's arc is structurally invisible in it: the half taken off at
+// target sits under the `trim` chip and the stop-out under `exit`, and on
+// a book with 1,600 decisions they can be 40 rows apart. An EXIT that
+// closed a half-sized position read as a full loss with no hint that the
+// other half had already left.
+function PositionArc({ d }) {
+  const { data, loading } = usePaper(
+    `decisions?position_id=${encodeURIComponent(d.position_id)}` +
+    `&executed_only=true&limit=100`,
+    [d.position_id],
+  );
+  const legs = ((data || {}).decisions || [])
+    .slice()
+    .sort((a, b) => String(a.decided_at).localeCompare(String(b.decided_at)));
+  if (loading && !legs.length) return null;
+  if (legs.length < 2) return null;   // a lone OPEN is not yet an arc
+
+  const realized = legs.reduce(
+    (t, l) => t + Number((l.fill || {}).realizedPnl || 0), 0,
+  );
+  return (
+    <div className="pdd-col">
+      <div className="pdd-h">This position, start to finish</div>
+      <ol className="pdd-arc">
+        {legs.map(l => {
+          const f = l.fill || {};
+          const tone = PAPER_ACTION_TONE[l.action] || "hold";
+          return (
+            <li key={l.decision_id} className={l.decision_id === d.decision_id ? "on" : ""}>
+              <span className={`pd-action mono tone-${tone}`}>{l.action}</span>
+              <span className="mono pdd-arc-when">
+                {String(l.decided_at).slice(5, 16).replace("T", " ")}
+              </span>
+              <span className="mono pdd-arc-fill">
+                {f.qty ? `${Number(f.qty).toFixed(2)} @ ${px(f.price)}` : "—"}
+              </span>
+              <span className="mono pdd-arc-notional">{usd(f.notional)}</span>
+            </li>
+          );
+        })}
+      </ol>
+      <div className="pdd-rank mono">
+        realized{" "}
+        <span className={realized > 0 ? "pos" : realized < 0 ? "neg" : "muted"}>
+          {realized >= 0 ? "+" : "−"}{usd(Math.abs(realized), 2).slice(1)}
+        </span>
+        {" "}over {legs.length} legs
       </div>
     </div>
   );

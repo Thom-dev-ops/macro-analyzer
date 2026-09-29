@@ -61,6 +61,14 @@ def _ensure_schema() -> None:
     initialize_database(path)
 
 
+def _signal_book():
+    """The Signal Book by name. See store.get_portfolio's note."""
+    for pf in store.list_portfolios():
+        if pf.name == store.DEFAULT_BOOK_NAME and pf.status == "active":
+            return pf
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run one paper-trading tick.")
     mode = ap.add_mutually_exclusive_group()
@@ -96,7 +104,9 @@ def main() -> int:
 
     _ensure_schema()
 
-    book = store.get_portfolio(args.portfolio)
+    # Name it, never "the oldest active book" — two other books share this
+    # table and one of them is backdated by its history replay.
+    book = store.get_portfolio(args.portfolio) if args.portfolio else _signal_book()
     ephemeral = None
     if book is None:
         if dry_run:

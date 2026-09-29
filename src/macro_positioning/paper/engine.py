@@ -60,6 +60,7 @@ from macro_positioning.rules.portfolio import UNCORRELATED, bucket_for_ticker, b
 logger = logging.getLogger(__name__)
 
 PriceFn = Callable[[list[str]], dict[str, dict]]
+RangeFn = Callable[[list[str], str], dict[str, dict]]
 
 
 def _now() -> str:
@@ -71,6 +72,18 @@ def _default_price_fn(tickers: list[str]) -> dict[str, dict]:
     from macro_positioning.prices.spot import spot_prices
 
     return spot_prices(tickers)
+
+
+def _default_range_fn(tickers: list[str], since: str) -> dict[str, dict]:
+    """Traded high/low since a timestamp — what a resting stop needs.
+
+    Only read when the mandate sets `author_stops_only`; the default book
+    prices its stops off the mark. Same injection shape as `price_fn` so
+    tests stay off the wire.
+    """
+    from macro_positioning.prices.spot import traded_ranges
+
+    return traded_ranges(tickers, since=since)
 
 
 @dataclass
@@ -181,6 +194,11 @@ class _Tick:
         self.mandate: Mandate = portfolio.mandate
         self.positions = list(positions)
         self.marks = marks
+        # ticker -> {"high","low","bars","from","to"} since each position's
+        # last mark. Populated only under `author_stops_only`; empty
+        # otherwise, which is what makes `stop_trigger()` fall back to the
+        # mark for every other book.
+        self.ranges: dict[str, dict] = {}
         self.cash = portfolio.cash
         self.tick_id = tick_id
         self.now = now or datetime.now(UTC)
@@ -219,6 +237,52 @@ class _Tick:
     def price_source(self, ticker: str) -> Optional[str]:
         q = self.marks.get(ticker.upper())
         return q.get("source") if q else None
+
+    def stop_trigger(self, p: Position, mark: float) -> Optional[tuple[float, str]]:
+        """Has this position's stop been hit, and at what price?
+
+        Default: the stop is compared to the MARK and fills there — the
+        book only looks twice a day, so that is all it honestly saw.
+
+        Under `author_stops_only` the stop is the author's own level held
+        as a RESTING order: it fires on the traded range since the last
+        mark and fills AT the stop, not at wherever the tape happens to be
+        when the book next looks. The difference is not cosmetic — ETH
+        pierced 2530 on 2026-09-04 and did not CLOSE above it until
+        2026-09-18, which is −1R against −3.75R on the same call.
+
+        Returns `(fill_price, why)` or None.
+        """
+        if not p.stop or p.stop <= 0:
+            return None
+        # ORDER MATTERS. The resting check runs FIRST, because if the tape
+        # went through the level then the order filled there — the mark is
+        # simply where price got to afterwards, and honouring it would book
+        # a worse fill than the resting stop actually had. HYPE is the case:
+        # stop 87, pierced intraday on 2026-09-03 (high 87.99) and CLOSED at
+        # 87.53. Mark-first fills at 87.53 for −$33.32; resting-first fills
+        # at 87 for −$28.34, which is the −1R the stop was placed to cost.
+        if self.mandate.author_stops_only:
+            rng = self.ranges.get(p.ticker.upper())
+            if rng:
+                pierced = (
+                    rng.get("low") is not None and float(rng["low"]) <= p.stop
+                    if p.is_long
+                    else rng.get("high") is not None and float(rng["high"]) >= p.stop
+                )
+                if pierced:
+                    extreme = rng["low"] if p.is_long else rng["high"]
+                    return (
+                        float(p.stop),
+                        f"traded through {p.stop:g} ({rng['bars']} bars "
+                        f"{rng.get('from')}..{rng.get('to')}, "
+                        f"extreme {float(extreme):g})",
+                    )
+        # No range to read, or the level was never touched: the mark is all
+        # the book honestly saw.
+        if p.stop_breached(mark):
+            return (mark, "mark")
+        return None
 
     @property
     def equity(self) -> float:
@@ -430,6 +494,13 @@ class _Tick:
                 "band": str(read.band),
                 "components": [c.as_dict() for c in read.components],
                 "targetSupport": None,   # filled in below when composed
+                # "author" when the caller drew the stop, "house_5.0%" when
+                # the book supplied one because they did not. An equity
+                # curve must never confuse the two: one measures the call,
+                # the other measures a sizing rule.
+                "stopSource": (getattr(read, "source_row", {}) or {}).get(
+                    "stopSource", "author"
+                ),
             },
             high_water_price=self.mark_of(read.ticker),
         )
@@ -619,18 +690,24 @@ def _exit_pass(tick: _Tick, reads: dict[str, RankRead]) -> None:
         }
 
         # 1. Stop — risk first, always.
-        if p.stop_breached(mark):
+        triggered = tick.stop_trigger(p, mark)
+        if triggered is not None:
+            stop_price, why = triggered
             d = tick.decide(
                 ticker=p.ticker, action=Action.EXIT, intent=Intent.STOP_HIT,
                 headline=Intent.STOP_HIT.describe(
-                    ticker=p.ticker, stop=f"{p.stop:g}", price=f"{mark:g}"
+                    ticker=p.ticker, stop=f"{p.stop:g}", price=f"{stop_price:g}"
                 ),
                 side=p.side, rank=p.rank_now, rank_prev=rank_prev,
                 current_weight_pct=weight, notional=p.exposure(mark),
-                position_id=p.position_id, rationale=base_rationale,
+                position_id=p.position_id,
+                rationale={**base_rationale, "stop": {
+                    "trigger": why, "mark": mark, "filledAt": stop_price,
+                    "resting": tick.mandate.author_stops_only,
+                }},
             )
             tick.fill(position=p, action=Action.EXIT, intent=Intent.STOP_HIT,
-                      qty=p.qty, ref_price=mark, decision=d)
+                      qty=p.qty, ref_price=stop_price, decision=d)
             continue
 
         # 2. Side flip — the stack now reads the other way with real weight.
@@ -730,11 +807,21 @@ def _exit_pass(tick: _Tick, reads: dict[str, RankRead]) -> None:
                     # is left so three 25% rungs leave a 25% runner.
                     remaining_share = max(1e-9, 1.0 - sum(r[1] for r in rungs[:p.rungs_taken]))
                     qty = p.qty * min(1.0, take / remaining_share)
+                    # Say what actually happens to the stop. On a book that
+                    # holds the author's level, the rung takes its slice and
+                    # the stop does not move — a headline promising
+                    # "stop to breakeven" there would be describing a write
+                    # the engine is about to skip.
+                    stop_to_says = (
+                        f"{p.stop:g} — unchanged, the author's"
+                        if m.author_stops_only and p.stop
+                        else stop_to.replace("_", " ")
+                    )
                     d = tick.decide(
                         ticker=p.ticker, action=Action.TRIM, intent=Intent.RUNG_TAKEN,
                         headline=Intent.RUNG_TAKEN.describe(
                             ticker=p.ticker, r=at_r, take_pct=take * 100,
-                            stop_to=stop_to.replace("_", " "),
+                            stop_to=stop_to_says,
                         ),
                         side=p.side, rank=p.rank_now, rank_prev=rank_prev,
                         current_weight_pct=weight, notional=abs(qty * mark),
@@ -744,11 +831,16 @@ def _exit_pass(tick: _Tick, reads: dict[str, RankRead]) -> None:
                               qty=qty, ref_price=mark, decision=d)
                     p.rungs_taken += 1
                     sign = 1.0 if p.is_long else -1.0
-                    if stop_to == "breakeven":
-                        p.stop = p.avg_price
-                    elif stop_to.startswith("lock_") and p.initial_risk:
-                        lock_r = float(stop_to[len("lock_"):-1])
-                        p.stop = p.avg_price + sign * lock_r * p.initial_risk
+                    # Ratcheting the stop is the BOOK's risk management,
+                    # not the author's. On a copy-trader that silently
+                    # replaces the level being measured, so the rung still
+                    # takes its slice but the stop stays where it was drawn.
+                    if not m.author_stops_only:
+                        if stop_to == "breakeven":
+                            p.stop = p.avg_price
+                        elif stop_to.startswith("lock_") and p.initial_risk:
+                            lock_r = float(stop_to[len("lock_"):-1])
+                            p.stop = p.avg_price + sign * lock_r * p.initial_risk
                     continue
 
         # 4. Trailing giveback — armed once the trade has made something
@@ -1171,16 +1263,24 @@ def _entry_pass(
             continue
 
         stop = float(row["stop"])
-        # A stop the overnight move can walk through is not risk control.
-        risk_pct = abs(mark - stop) / mark if mark else 0.0
-        if risk_pct < m.min_stop_pct - 1e-9:      # a stop AT the floor passes
-            reject(Blocker.STOP_TOO_TIGHT, ticker=read.ticker,
-                   risk_pct=risk_pct * 100, floor_pct=m.min_stop_pct * 100)
-            continue
-        if risk_pct > m.max_stop_pct + 1e-9:
-            reject(Blocker.STOP_TOO_WIDE, ticker=read.ticker,
-                   risk_pct=risk_pct * 100, cap_pct=m.max_stop_pct * 100)
-            continue
+        # A HOUSE stop was derived from the price the book is about to pay,
+        # at the book's own policy distance — it does not need to be
+        # measured against the floor and the cap, it IS them. Measuring it
+        # anyway rejects on rounding: the candidate's mark and this tick's
+        # mark are two reads of the same tape seconds apart, and a 0.1%
+        # drift puts an exactly-5% stop over a 5% cap.
+        stop_source = str(row.get("stopSource") or "author")
+        if stop_source == "author":
+            # A stop the overnight move can walk through is not risk control.
+            risk_pct = abs(mark - stop) / mark if mark else 0.0
+            if risk_pct < m.min_stop_pct - 1e-9:  # a stop AT the floor passes
+                reject(Blocker.STOP_TOO_TIGHT, ticker=read.ticker,
+                       risk_pct=risk_pct * 100, floor_pct=m.min_stop_pct * 100)
+                continue
+            if risk_pct > m.max_stop_pct + 1e-9:
+                reject(Blocker.STOP_TOO_WIDE, ticker=read.ticker,
+                       risk_pct=risk_pct * 100, cap_pct=m.max_stop_pct * 100)
+                continue
         wrong_side = mark <= stop if read.side == "LONG" else mark >= stop
         if wrong_side:
             reject(Blocker.LEVELS_STALE, ticker=read.ticker, price=f"{mark:g}",
@@ -1394,11 +1494,17 @@ def _entry_pass(
             # stop only ever tightens on an add. Loosening it would hand back
             # protection the position had already earned.
             new_stop = row.get("stop")
-            if new_stop:
+            if new_stop and not m.author_stops_only:
                 if position.is_long:
                     position.stop = max(position.stop or 0.0, float(new_stop))
                 else:
                     position.stop = min(position.stop or float("inf"), float(new_stop))
+            elif new_stop and m.author_stops_only:
+                # A fresh call on a name already held carries the author's
+                # CURRENT stop. Take it as stated — including looser, which
+                # the signal book refuses — because on this book the stop is
+                # a reading of the author, not a ratchet the book owns.
+                position.stop = float(new_stop)
             position.target = row.get("target") or position.target
 
         action = Action.ADD if held is not None else Action.OPEN
@@ -1502,6 +1608,7 @@ def run_tick(
     db_path: Optional[Path] = None,
     now: Optional[datetime] = None,
     price_fn: Optional[PriceFn] = None,
+    range_fn: Optional[RangeFn] = None,
     candidates: Optional[list[RankRead]] = None,
     portfolio: Optional[Portfolio] = None,
     valuations_in: Optional[dict] = None,
@@ -1583,6 +1690,27 @@ def run_tick(
     tick.valuations = valuations
     tick.reads = by_ticker
     tick.learned = learned
+
+    # A book that holds the author's stop as a resting order needs the
+    # range the tape covered since it last looked, not just where the tape
+    # is now. One window per position (they were marked at different
+    # times), best-effort: losing it costs the resting check, not the tick.
+    if pf.mandate.author_stops_only and positions:
+        rfetch = range_fn or _default_range_fn
+        for p in positions:
+            since = p.last_mark_at or p.opened_at
+            if not since:
+                continue
+            try:
+                got = rfetch([p.ticker.upper()], since) or {}
+            except Exception as exc:
+                logger.warning(
+                    "traded range unavailable for %s since %s: %s",
+                    p.ticker, since, exc,
+                )
+                continue
+            for k, v in got.items():
+                tick.ranges[k.upper()] = v
     opening = tick.state()
     result = TickResult(
         tick_id=tick_id,

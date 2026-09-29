@@ -1,0 +1,596 @@
+{
+  "$schema_version": "1.0",
+  "description": "ticker -> {name, sector, industry}. The evidence behind `$sector_fallback` in config/paper_sleeves.json, which places any ticker the sleeve allowlist does not name. Data only: the mapping from industry/sector to sleeve lives in the sleeves config.",
+  "$maintenance": "Regenerate with scripts/refresh_ticker_sectors.py --write.",
+  "refreshed_at": "2026-09-22T13:08:41.033573+00:00",
+  "counts": {
+    "tickers": 117
+  },
+  "tickers": {
+    "AAOI": {
+      "name": "Applied Optoelectronics, Inc.",
+      "sector": "Technology",
+      "industry": "Communication Equipment"
+    },
+    "AAPL": {
+      "name": "Apple Inc.",
+      "sector": "Technology",
+      "industry": "Consumer Electronics"
+    },
+    "ABAT": {
+      "name": "American Battery Technology Com",
+      "sector": "Industrials",
+      "industry": "Waste Management"
+    },
+    "ABEO": {
+      "name": "Abeona Therapeutics Inc.",
+      "sector": "Healthcare",
+      "industry": "Biotechnology"
+    },
+    "ACHR": {
+      "name": "Archer Aviation Inc.",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "ACON": {
+      "name": "Aclarion, Inc.",
+      "sector": "Healthcare",
+      "industry": "Health Information Services"
+    },
+    "ADM": {
+      "name": "Archer-Daniels-Midland Company",
+      "sector": "Consumer Defensive",
+      "industry": "Farm Products"
+    },
+    "AEM": {
+      "name": "Agnico Eagle Mines Limited",
+      "sector": "Basic Materials",
+      "industry": "Gold"
+    },
+    "AGPU": {
+      "name": "Axe Compute Inc.",
+      "sector": "Technology",
+      "industry": "Software - Infrastructure"
+    },
+    "AISP": {
+      "name": "Airship AI Holdings, Inc",
+      "sector": "Technology",
+      "industry": "Software - Infrastructure"
+    },
+    "AMD": {
+      "name": "Advanced Micro Devices, Inc.",
+      "sector": "Technology",
+      "industry": "Semiconductors"
+    },
+    "AMZN": {
+      "name": "Amazon.com, Inc.",
+      "sector": "Consumer Cyclical",
+      "industry": "Internet Retail"
+    },
+    "APLD": {
+      "name": "Applied Digital Corporation",
+      "sector": "Technology",
+      "industry": "Information Technology Services"
+    },
+    "AR": {
+      "name": "Antero Resources Corporation",
+      "sector": "Energy",
+      "industry": "Oil & Gas E&P"
+    },
+    "AREB": {
+      "name": "American Rebel Holdings, Inc.",
+      "sector": "Consumer Cyclical",
+      "industry": "Footwear & Accessories"
+    },
+    "ASAN": {
+      "name": "Asana, Inc.",
+      "sector": "Technology",
+      "industry": "Software - Application"
+    },
+    "ASST": {
+      "name": "Strive, Inc.",
+      "sector": "Financial Services",
+      "industry": "Asset Management"
+    },
+    "AVGO": {
+      "name": "Broadcom Inc.",
+      "sector": "Technology",
+      "industry": "Semiconductors"
+    },
+    "AXTI": {
+      "name": "AXT Inc",
+      "sector": "Technology",
+      "industry": "Semiconductor Equipment & Materials"
+    },
+    "BAC": {
+      "name": "Bank of America Corporation",
+      "sector": "Financial Services",
+      "industry": "Banks - Diversified"
+    },
+    "BBW": {
+      "name": "Build-A-Bear Workshop, Inc.",
+      "sector": "Consumer Cyclical",
+      "industry": "Specialty Retail"
+    },
+    "BJDX": {
+      "name": "Bluejay Diagnostics, Inc.",
+      "sector": "Healthcare",
+      "industry": "Medical Devices"
+    },
+    "BKSY": {
+      "name": "BlackSky Technology Inc.",
+      "sector": "Industrials",
+      "industry": "Specialty Business Services"
+    },
+    "BLZE": {
+      "name": "Backblaze, Inc.",
+      "sector": "Technology",
+      "industry": "Software - Infrastructure"
+    },
+    "CCJ": {
+      "name": "Cameco Corporation",
+      "sector": "Energy",
+      "industry": "Uranium"
+    },
+    "CELH": {
+      "name": "Celsius Holdings, Inc.",
+      "sector": "Consumer Defensive",
+      "industry": "Beverages - Non-Alcoholic"
+    },
+    "CF": {
+      "name": "CF Industries Holdings, Inc.",
+      "sector": "Basic Materials",
+      "industry": "Agricultural Inputs"
+    },
+    "CIFR": {
+      "name": "Cipher Digital Inc.",
+      "sector": "Technology",
+      "industry": "Information Technology Services"
+    },
+    "CMPS": {
+      "name": "COMPASS Pathways Plc - American",
+      "sector": "Healthcare",
+      "industry": "Medical Care Facilities"
+    },
+    "COIN": {
+      "name": "Coinbase Global, Inc.",
+      "sector": "Financial Services",
+      "industry": "Financial Data & Stock Exchanges"
+    },
+    "CPNG": {
+      "name": "Coupang, Inc.",
+      "sector": "Consumer Cyclical",
+      "industry": "Internet Retail"
+    },
+    "CRCL": {
+      "name": "Circle Internet Group, Inc.",
+      "sector": "Financial Services",
+      "industry": "Capital Markets"
+    },
+    "CYPH": {
+      "name": "Cypherpunk Technologies Inc.",
+      "sector": "Financial Services",
+      "industry": "Asset Management"
+    },
+    "DDD": {
+      "name": "3D Systems Corporation",
+      "sector": "Technology",
+      "industry": "Computer Hardware"
+    },
+    "DNN": {
+      "name": "Denison Mines Corp",
+      "sector": "Energy",
+      "industry": "Uranium"
+    },
+    "DUOT": {
+      "name": "Duos Technologies Group, Inc.",
+      "sector": "Technology",
+      "industry": "Software - Application"
+    },
+    "DVLT": {
+      "name": "Datavault AI Inc.",
+      "sector": "Technology",
+      "industry": "Software - Infrastructure"
+    },
+    "EC": {
+      "name": "Ecopetrol S.A.",
+      "sector": "Energy",
+      "industry": "Oil & Gas Integrated"
+    },
+    "ELF": {
+      "name": "e.l.f. Beauty, Inc.",
+      "sector": "Consumer Defensive",
+      "industry": "Household & Personal Products"
+    },
+    "ENVB": {
+      "name": "Enveric Biosciences, Inc.",
+      "sector": "Healthcare",
+      "industry": "Biotechnology"
+    },
+    "EOG": {
+      "name": "EOG Resources, Inc.",
+      "sector": "Energy",
+      "industry": "Oil & Gas E&P"
+    },
+    "EOSE": {
+      "name": "Eos Energy Enterprises, Inc.",
+      "sector": "Industrials",
+      "industry": "Electrical Equipment & Parts"
+    },
+    "ERNA": {
+      "name": "Ernexa Therapeutics Inc.",
+      "sector": "Healthcare",
+      "industry": "Biotechnology"
+    },
+    "F": {
+      "name": "Ford Motor Company",
+      "sector": "Consumer Cyclical",
+      "industry": "Auto Manufacturers"
+    },
+    "FCX": {
+      "name": "Freeport-McMoRan, Inc.",
+      "sector": "Basic Materials",
+      "industry": "Copper"
+    },
+    "FRGT": {
+      "name": "Freight Technologies, Inc.",
+      "sector": "Technology",
+      "industry": "Software - Application"
+    },
+    "GD": {
+      "name": "General Dynamics Corporation",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "GERN": {
+      "name": "Geron Corporation",
+      "sector": "Healthcare",
+      "industry": "Biotechnology"
+    },
+    "GME": {
+      "name": "GameStop Corporation",
+      "sector": "Consumer Cyclical",
+      "industry": "Specialty Retail"
+    },
+    "GOOG": {
+      "name": "Alphabet Inc.",
+      "sector": "Communication Services",
+      "industry": "Internet Content & Information"
+    },
+    "GOOGL": {
+      "name": "Alphabet Inc.",
+      "sector": "Communication Services",
+      "industry": "Internet Content & Information"
+    },
+    "GPRO": {
+      "name": "GoPro, Inc.",
+      "sector": "Technology",
+      "industry": "Consumer Electronics"
+    },
+    "HII": {
+      "name": "Huntington Ingalls Industries, ",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "HIMS": {
+      "name": "Hims & Hers Health, Inc.",
+      "sector": "Healthcare",
+      "industry": "Drug Manufacturers - Specialty & Generic"
+    },
+    "HL": {
+      "name": "Hecla Mining Company",
+      "sector": "Basic Materials",
+      "industry": "Other Precious Metals & Mining"
+    },
+    "HOOD": {
+      "name": "Robinhood Markets, Inc.",
+      "sector": "Financial Services",
+      "industry": "Capital Markets"
+    },
+    "HOUR": {
+      "name": "Hour Loop, Inc.",
+      "sector": "Consumer Cyclical",
+      "industry": "Internet Retail"
+    },
+    "IDN": {
+      "name": "Intellicheck, Inc.",
+      "sector": "Technology",
+      "industry": "Software - Application"
+    },
+    "IFRX": {
+      "name": "InflaRx N.V.",
+      "sector": "Healthcare",
+      "industry": "Biotechnology"
+    },
+    "INTC": {
+      "name": "Intel Corporation",
+      "sector": "Technology",
+      "industry": "Semiconductors"
+    },
+    "IPST": {
+      "name": "IP Strategy Holdings, Inc.",
+      "sector": "Financial Services",
+      "industry": "Capital Markets"
+    },
+    "IREN": {
+      "name": "IREN LIMITED",
+      "sector": "Financial Services",
+      "industry": "Capital Markets"
+    },
+    "JOBY": {
+      "name": "Joby Aviation, Inc.",
+      "sector": "Industrials",
+      "industry": "Airports & Air Services"
+    },
+    "KAVL": {
+      "name": "Kaival Brands Innovations Group",
+      "sector": "Consumer Defensive",
+      "industry": "Tobacco"
+    },
+    "KEEL": {
+      "name": "Keel Infrastructure Corp.",
+      "sector": "Technology",
+      "industry": "Information Technology Services"
+    },
+    "KTOS": {
+      "name": "Kratos Defense & Security Solut",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "LAES": {
+      "name": "SEALSQ Corp",
+      "sector": "Technology",
+      "industry": "Semiconductors"
+    },
+    "LASE": {
+      "name": "Laser Photonics Corporation",
+      "sector": "Industrials",
+      "industry": "Specialty Industrial Machinery"
+    },
+    "LDOS": {
+      "name": "Leidos Holdings, Inc.",
+      "sector": "Technology",
+      "industry": "Information Technology Services"
+    },
+    "LMT": {
+      "name": "Lockheed Martin Corporation",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "MOS": {
+      "name": "Mosaic Company (The)",
+      "sector": "Basic Materials",
+      "industry": "Agricultural Inputs"
+    },
+    "MP": {
+      "name": "MP Materials Corp.",
+      "sector": "Basic Materials",
+      "industry": "Other Industrial Metals & Mining"
+    },
+    "MRVL": {
+      "name": "Marvell Technology, Inc.",
+      "sector": "Technology",
+      "industry": "Semiconductors"
+    },
+    "MSFT": {
+      "name": "Microsoft Corporation",
+      "sector": "Technology",
+      "industry": "Software - Infrastructure"
+    },
+    "MSTR": {
+      "name": "Strategy Inc",
+      "sector": "Technology",
+      "industry": "Software - Application"
+    },
+    "NEM": {
+      "name": "Newmont Corporation",
+      "sector": "Basic Materials",
+      "industry": "Gold"
+    },
+    "NERV": {
+      "name": "Minerva Neurosciences, Inc",
+      "sector": "Healthcare",
+      "industry": "Biotechnology"
+    },
+    "NFE": {
+      "name": "New Fortress Energy Inc.",
+      "sector": "Energy",
+      "industry": "Oil & Gas Midstream"
+    },
+    "NOC": {
+      "name": "Northrop Grumman Corporation",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "NRGV": {
+      "name": "Energy Vault Holdings, Inc.",
+      "sector": "Utilities",
+      "industry": "Utilities - Renewable"
+    },
+    "NVDA": {
+      "name": "NVIDIA Corporation",
+      "sector": "Technology",
+      "industry": "Semiconductors"
+    },
+    "NXE": {
+      "name": "Nexgen Energy Ltd.",
+      "sector": "Energy",
+      "industry": "Uranium"
+    },
+    "OKLO": {
+      "name": "Oklo Inc.",
+      "sector": "Utilities",
+      "industry": "Utilities - Independent Power Producers"
+    },
+    "ONDS": {
+      "name": "Ondas Inc",
+      "sector": "Technology",
+      "industry": "Communication Equipment"
+    },
+    "OPAD": {
+      "name": "Offerpad Solutions Inc.",
+      "sector": "Real Estate",
+      "industry": "Real Estate Services"
+    },
+    "OPEN": {
+      "name": "Opendoor Technologies Inc",
+      "sector": "Real Estate",
+      "industry": "Real Estate Services"
+    },
+    "PACS": {
+      "name": "PACS Group, Inc.",
+      "sector": "Healthcare",
+      "industry": "Medical Care Facilities"
+    },
+    "PALAF": {
+      "name": "Paladin Energy Ltd.",
+      "sector": "Energy",
+      "industry": "Uranium"
+    },
+    "PALI": {
+      "name": "Palisade Bio, Inc.",
+      "sector": "Healthcare",
+      "industry": "Biotechnology"
+    },
+    "PLTR": {
+      "name": "Palantir Technologies Inc.",
+      "sector": "Technology",
+      "industry": "Software - Infrastructure"
+    },
+    "PONY": {
+      "name": "Pony AI Inc.",
+      "sector": "Technology",
+      "industry": "Information Technology Services"
+    },
+    "PURR": {
+      "name": "Hyperliquid Strategies Inc",
+      "sector": "Financial Services",
+      "industry": "Capital Markets"
+    },
+    "PYPL": {
+      "name": "PayPal Holdings, Inc.",
+      "sector": "Financial Services",
+      "industry": "Credit Services"
+    },
+    "RGTI": {
+      "name": "Rigetti Computing, Inc.",
+      "sector": "Technology",
+      "industry": "Computer Hardware"
+    },
+    "RTX": {
+      "name": "RTX Corporation",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "RZLV": {
+      "name": "Rezolve AI PLC",
+      "sector": "Technology",
+      "industry": "Software - Infrastructure"
+    },
+    "SATL": {
+      "name": "Satellogic Inc.",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "SDOT": {
+      "name": "Sadot Group Inc.",
+      "sector": "Consumer Defensive",
+      "industry": "Farm Products"
+    },
+    "SG": {
+      "name": "Sweetgreen, Inc.",
+      "sector": "Consumer Cyclical",
+      "industry": "Restaurants"
+    },
+    "SHOP": {
+      "name": "Shopify Inc.",
+      "sector": "Technology",
+      "industry": "Software - Application"
+    },
+    "SNAP": {
+      "name": "Snap Inc.",
+      "sector": "Communication Services",
+      "industry": "Internet Content & Information"
+    },
+    "SPCX": {
+      "name": "Space Exploration Technologies ",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "TKO": {
+      "name": "TKO Group Holdings, Inc.",
+      "sector": "Communication Services",
+      "industry": "Entertainment"
+    },
+    "TLRY": {
+      "name": "Tilray Brands, Inc.",
+      "sector": "Healthcare",
+      "industry": "Drug Manufacturers - Specialty & Generic"
+    },
+    "TSLA": {
+      "name": "Tesla, Inc.",
+      "sector": "Consumer Cyclical",
+      "industry": "Auto Manufacturers"
+    },
+    "TSM": {
+      "name": "Taiwan Semiconductor Manufactur",
+      "sector": "Technology",
+      "industry": "Semiconductors"
+    },
+    "TXT": {
+      "name": "Textron Inc.",
+      "sector": "Industrials",
+      "industry": "Aerospace & Defense"
+    },
+    "UAMY": {
+      "name": "United States Antimony Corporat",
+      "sector": "Basic Materials",
+      "industry": "Other Industrial Metals & Mining"
+    },
+    "UEC": {
+      "name": "Uranium Energy Corp.",
+      "sector": "Energy",
+      "industry": "Uranium"
+    },
+    "ULCC": {
+      "name": "Frontier Group Holdings, Inc.",
+      "sector": "Industrials",
+      "industry": "Airlines"
+    },
+    "UMAC": {
+      "name": "Unusual Machines, Inc.",
+      "sector": "Technology",
+      "industry": "Computer Hardware"
+    },
+    "USAR": {
+      "name": "USA Rare Earth, Inc.",
+      "sector": "Basic Materials",
+      "industry": "Other Industrial Metals & Mining"
+    },
+    "VNDA": {
+      "name": "Vanda Pharmaceuticals Inc.",
+      "sector": "Healthcare",
+      "industry": "Biotechnology"
+    },
+    "VTRS": {
+      "name": "Viatris Inc.",
+      "sector": "Healthcare",
+      "industry": "Drug Manufacturers - Specialty & Generic"
+    },
+    "WFC": {
+      "name": "Wells Fargo & Company",
+      "sector": "Financial Services",
+      "industry": "Banks - Diversified"
+    },
+    "WULF": {
+      "name": "TeraWulf Inc.",
+      "sector": "Financial Services",
+      "industry": "Capital Markets"
+    },
+    "XOM": {
+      "name": "ExxonMobil Holdings Corporation",
+      "sector": "Energy",
+      "industry": "Oil & Gas Integrated"
+    }
+  }
+}

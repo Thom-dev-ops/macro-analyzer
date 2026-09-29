@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.macro.paper-cohort-tick</string>
+
+    <!-- Use the venv python DIRECTLY (not `uv run`): this interpreter has been
+         granted Full Disk Access, so launchd can reach the repo under
+         ~/Documents. Same pattern as com.macro.paper-tick. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/thom/Documents/Personal/Code Projects/Macro Analyzer/.venv/bin/python</string>
+        <string>scripts/paper_cohort_tick.py</string>
+        <string>--execute</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/thom/Documents/Personal/Code Projects/Macro Analyzer</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/thom/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- 06:25 and 13:25 — ten minutes behind com.macro.paper-tick. The two
+         books commit in one transaction each and the signal book is the
+         bigger one; staggering them keeps the cohort tick from arriving
+         while that write is still open, which would cost it a retry cycle
+         for no reason. Both still trade the same day's freshest reads. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>25</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>13</integer>
+            <key>Minute</key><integer>25</integer>
+        </dict>
+    </array>
+
+    <!-- One-shot batch job: exits when done, so no KeepAlive. RunAtLoad is
+         false on purpose — loading the job should not itself trade the book.
+         No --bootstrap either: the book is opened once, by hand, so a
+         mis-scheduled job can never quietly open a second one. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- The tick prints its decision set AND its coverage funnel, so this log
+         is the audit trail: every fill, every refusal, and the share of the
+         cohort's flow the book was able to price at all. -->
+    <key>StandardOutPath</key>
+    <string>/Users/thom/Library/Logs/macro-paper-cohort-tick.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/thom/Library/Logs/macro-paper-cohort-tick.err.log</string>
+</dict>
+</plist>

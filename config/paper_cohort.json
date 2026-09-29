@@ -1,0 +1,136 @@
+{
+  "$schema_version": "1.0",
+  "description": "Mandate and roster for the COHORT book — a second paper book that follows the Feather Hands crowd's own calls instead of the desk's blended score. config/paper_trading.json runs the signal book: desk score, technical-agent levels, composed target. This one is a copy-trader. It takes the caller's ticker, side, entry, stop and target as given and asks one question the signal book cannot: would following these people have made money?",
+  "$why_separate": "Both books share one engine. What differs is the CANDIDATE SOURCE (paper/cohort.py reads the signals table by author instead of the trade_scores pass) and this mandate. Keeping the mandate in its own file means the cohort book's rules can be loosened for a fast, crypto-heavy, high-variance flow without touching the rules the signal book's equity curve was made under.",
+  "scale": "rank_0_100",
+  "$scale_note": "Same 0-100 rank scale as the signal book so the two decision logs read the same way — but the rank is computed differently. There is no percentile distribution to anchor against here: a cohort call is not scored against a universe, it is scored on its own merits (see `rank_model` and paper/cohort.py). The anchors are documented rather than derived, and the number means 'how good is this call, on the evidence the call itself carries', not 'where does this sit in the distribution'.",
+  "cohort": {
+    "label": "Feather Hands",
+    "$roster_comment": "Big_Nuts and the Feather Hands channels are one trading crowd; Market Traders is the same people under a second banner (input_authors.parent_channel records it). Deliberately EXCLUDES Wolf Pack, Gem Hunters, OG Whales, Trading Operation Desk and Ari Gold — each is a separate desk with its own style, and blending five of them into one equity curve loses the ability to read whose calls made the money. Adding one is a line here.",
+    "authors": [
+      {
+        "author_id": "feather-hands:big-nuts",
+        "display": "Big_Nuts"
+      },
+      {
+        "author_id": "market-traders:big-nuts",
+        "display": "Big_Nuts (Market Traders)"
+      },
+      {
+        "author_id": "feather-hands-trading:feather-hands-trading",
+        "display": "Feather Hands Trading"
+      },
+      {
+        "author_id": "feather-hands:maddog31",
+        "display": "MadDog31"
+      },
+      {
+        "author_id": "market-traders:maddog31",
+        "display": "MadDog31 (Market Traders)"
+      },
+      {
+        "author_id": "feather-hands:joejoe55",
+        "display": "joejoe55"
+      },
+      {
+        "author_id": "market-traders:market-traders",
+        "display": "Market Traders"
+      }
+    ],
+    "lookback_days": 10,
+    "$lookback_comment": "A chart call is a perishable good. Past ten days the levels on it describe a tape that has moved on, and the book would be opening a position on a thesis nobody in the room is still talking about. Ten days is also roughly the horizon their 'swing' timeframe means in practice.",
+    "call_types": [
+      "directional_long",
+      "directional_short"
+    ],
+    "$call_type_comment": "ONLY explicitly directional calls. `bidirectional` charts mark both rails without picking a side, `no_trade` and `not_a_chart` carry no thesis at all, and a null call_type is an older extraction that predates the field. None of them is a trade, and inferring a side from the chart's price colour is the exact bug that put a fake bias on no_trade charts once already.",
+    "require_trigger": true,
+    "$trigger_comment": "A `watching` call is a plan, not a position: 'wants a breakout above 105 to run at 120'. Buying it at 98 is buying a trade its author has not taken. When true, a watching call only becomes a candidate once the last close has actually cleared the entry in the call's direction. Calls already marked `entry`, `active` or `in_progress` are live by the author's own account and skip the check.",
+    "min_live_rr": 1.2,
+    "$min_live_rr_comment": "The call's reward:risk re-measured at TODAY's price, not at the author's entry. A 3R setup posted at 100 with a stop at 95 and a target at 115 is a 0.8R trade once price is at 111 — same chart, same levels, a different trade. Following the call means taking it while it is still the call; below this the book records `rr_collapsed` and leaves it. This is also what stops the book chasing: the engine fills at the live mark, never at the entry the author drew.",
+    "default_stop_pct": 0.05,
+    "$default_stop_comment": "What to do when a chart carries a target but no stop — common in this crowd, where the invalidation is obvious on the picture and never typed. Those calls used to be dropped as `no_levels`, which threw away real trades. Reading a stop off the chart's structure would be the book deciding the trade, and this book must not. So it takes a flat house stop: 5% adverse of the price the book actually pays. That is a position-sizing rule, not a reading of the chart, and it is tagged `stop_source: house_5.0%` on the candidate, the position and the decision log so no accuracy number ever credits the author with a stop they did not draw. It sits exactly at the mandate's max_stop_pct — the desk's one hard limit — so a call needing more room than that is refused, not widened. R:R is still measured against it, so a target inside 5% fails min_live_rr and never opens.",
+    "max_candidates": 60,
+    "$max_candidates_comment": "The cohort posts hundreds of charts a week. The book only ever fills a dozen, so ranking the top 60 and stopping is the whole working set — the rest are logged in the coverage summary, not silently dropped."
+  },
+  "rank_model": {
+    "$comment": "How a call becomes a 0-100 rank. Every term lands on the decision row as a (name, delta, reason) triple, so a 3.2% position is always traceable to the call that produced it. NONE of this is calibrated against outcomes — it is an ordering, same caveat as the signal book's rank.",
+    "base": 50.0,
+    "conviction_per_point": 8.0,
+    "$conviction_comment": "signals.conviction is 0-5, normalised from the chart's own language by the extractor. Centred on 2.5, so +8 per point puts a 5/5 call at +20 and a 0/5 at -20.",
+    "confluence_per_point": 3.0,
+    "$confluence_comment": "instrument_detail.confluence_score — how many things on the chart agreed. Centred on 3.",
+    "rr_bonus_3r": 10.0,
+    "rr_bonus_2r": 5.0,
+    "rr_penalty_thin": -10.0,
+    "rr_thin_below": 1.2,
+    "$rr_comment": "Reward:risk from the call's OWN entry/stop/target, not from a composed target. Mirrors the signal book's R:R rungs so the two ranks stay legible against each other.",
+    "stage_live_bonus": 8.0,
+    "$stage_comment": "A call the author says they are IN outranks one they are watching. Their own money is the strongest evidence on the chart.",
+    "stale_after_days": 2.0,
+    "stale_per_day": -2.0,
+    "stale_floor": -12.0,
+    "$stale_comment": "Freshness decay starts after two days and bottoms out at -12, which is deep enough to push a week-old call under the entry bar on its own.",
+    "agreement_bonus": 10.0,
+    "opposition_penalty": -15.0,
+    "$agreement_comment": "Two of them long the same name inside the window is the room agreeing. One long and one short is the room disagreeing, and the book should not be sized as if it were not.",
+    "edge_max_points": 8.0,
+    "edge_min_sample": 30,
+    "edge_alpha_cap_pct": 5.0,
+    "$edge_comment": "Per-author measured edge from the `call_outcomes` backtest — market-relative ALPHA, not win rate, because a fixed-horizon win rate in a trending market is mostly beta (the OG Whales 12% directional / 81% setup split is the proof). Gated on 30 scored calls and capped at +/-8 rank points so a measurement can tilt the size without deciding it. When the backtest is stale or thin the component is zero and says so on the row rather than quietly assuming an edge."
+  },
+  "book": {
+    "starting_equity_usd": 50000.0,
+    "base_currency": "USD"
+  },
+  "sizing": {
+    "min_position_pct": 0.015,
+    "max_position_pct": 0.05,
+    "$comment": "Floor is higher than the signal book's 1%: with a 25% cash floor and a dozen slots, a 1% starter on a book this fast is a position too small to teach anything. Ceiling stays at 5% — these are high-variance calls and the top rung should not be bigger than the desk's own.",
+    "min_ticket_usd": 250.0,
+    "add_threshold_pct": 0.0075
+  },
+  "cash": {
+    "min_cash_pct": 0.25,
+    "$comment": "Looser than the signal book's 30%. This book is measuring a signal source, not surviving a drawdown, and holding a third of it in cash would mute the very thing being measured. Still a hard floor — deployed may never exceed 75%.",
+    "rebalance_tolerance_pct": 0.005
+  },
+  "rank": {
+    "entry_floor": 60,
+    "exit_floor": 40,
+    "$comment": "Same bars as the signal book, and they mean the same thing on this scale: a 60 is a call with real conviction, decent R:R and nothing arguing against it. Asymmetric on purpose so a name sitting on the bar does not churn.",
+    "rotation_edge": 15
+  },
+  "concentration": {
+    "max_positions": 12,
+    "max_bucket_pct": 0.55,
+    "max_positions_per_bucket": 6,
+    "$comment": "The signal book's 20% / 3-per-bucket caps exist to stop a diversified book quietly becoming one bet. THIS BOOK IS ONE BET BY CONSTRUCTION — the cohort trades crypto, so BTC, ETH, SOL and HYPE all land in crypto_l1/crypto_alt and the signal book's caps would stop it trading after three names. Raised to 55% / 6 so the caps still bind on genuine over-concentration without vetoing the mandate itself. That the book is crypto-correlated is the finding, not a bug to be capped away."
+  },
+  "exits": {
+    "trim_at_target_pct": 0.5,
+    "trail_atr_mult": 0.0,
+    "trail_giveback_pct": 0.5,
+    "trail_arms_at_r": 1.0,
+    "min_hold_days": 1.0,
+    "$min_hold_comment": "The signal book holds three days minimum because it is a swing book being talked out of itself by reads that moved. This cohort trades intraday-to-swing charts and posts updates hourly; three days would make the book ignore its own source. One day still blocks the six-hour round trip.",
+    "stale_after_days": 10,
+    "$stale_comment": "Ten days, matching the lookback. When no fresh call for a held name has appeared in that time the room has moved on, and the position is closed as stale rather than left running on a thesis nobody is restating. This is the exit that does the most work in a copy book — most calls are never explicitly closed by their author.",
+    "reentry_cooldown_days": 3,
+    "reentry_reclaim_buffer_pct": 0.002,
+    "max_stops_per_window": 2,
+    "author_stops_only": true,
+    "$author_stops_comment": "The stop on this book is the level the AUTHOR drew, and the engine never rewrites it: no ratchet to breakeven at the first rung, no tighten on an add. A copy-trader that manages its own stop is no longer measuring the caller. It is also held as a RESTING order — it fires on the range the tape traded through since the last tick, not only on the twice-daily mark, and fills AT the stop. ETH (Big_Nuts, short 2446, stop 2530) is the case: pierced 2530 on 2026-09-04, did not CLOSE above it until 2026-09-18. Mark-priced that is -3.75R; as a resting stop it is -1.09R. The second number is the one that measures the call. The signal book keeps the default (mark-priced, book-managed stop) — it owns its own risk."
+  },
+  "composition": {
+    "use_composed_levels": false,
+    "min_target_support": 0.0,
+    "exit_target_support": 0.0,
+    "$comment": "The composed view (structure + trusted voices + regime + price action) is DELIBERATELY OFF here. Re-deciding the target with the desk's own machinery would turn this back into the desk's opinion, which is exactly what the signal book already measures — and the 'trusted voices' view would be scoring these calls partly against themselves. This book takes the call as given. That is the whole point of running it beside the other one."
+  },
+  "execution": {
+    "slippage_bps": 15,
+    "fee_bps": 0,
+    "$comment": "Three times the signal book's 5bps. Its universe is large-cap equities and BTC/ETH; this one takes size in HYPE, ZEC and SOL alts off a Telegram post, and 5bps would flatter every fill. Fees stay zero — measuring signal quality, not a broker."
+  }
+}

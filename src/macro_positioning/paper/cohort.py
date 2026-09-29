@@ -58,7 +58,7 @@ from macro_positioning.core.settings import settings
 from macro_positioning.paper.models import Mandate
 from macro_positioning.paper.rank import Component, RankRead, target_weight_for
 from macro_positioning.paper.vocabulary import Band, TRADEABLE_SIDES
-from macro_positioning.prices.symbol_map import resolve_symbol
+from macro_positioning.prices.symbol_map import book_tradeable, resolve_symbol
 
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,9 @@ class CohortConfig:
     call_types: tuple[str, ...] = ("directional_long", "directional_short")
     require_trigger: bool = True
     min_live_rr: float = 1.2
+    # Stop to use when the author drew a target but no stop. See the
+    # `$default_stop_comment` in config/paper_cohort.json.
+    default_stop_pct: float = 0.05
     max_candidates: int = 60
     rank_model: dict = field(default_factory=dict)
 
@@ -139,6 +142,7 @@ def load_cohort_config(path: str | Path | None = None) -> CohortConfig:
         call_types=tuple(c.get("call_types") or d.call_types),
         require_trigger=bool(c.get("require_trigger", d.require_trigger)),
         min_live_rr=float(c.get("min_live_rr", d.min_live_rr)),
+        default_stop_pct=float(c.get("default_stop_pct", d.default_stop_pct)),
         max_candidates=int(c.get("max_candidates", d.max_candidates)),
         rank_model=dict(raw.get("rank_model") or {}),
     )
@@ -178,13 +182,14 @@ class Coverage:
     unpriceable_tickers: list[tuple[str, int]] = field(default_factory=list)
     by_author: dict[str, int] = field(default_factory=dict)
     generated_at: str = ""
+    label: str = "cohort"        # who the funnel is counting, for the report line
 
     # Why a call never became a candidate. Ordered by how early the screen
     # runs, so the report reads as a funnel.
     REASONS = {
         "not_directional": "no side to take (bidirectional / no_trade / not_a_chart)",
         "unpriceable": "no mark — DEX pair or microcap outside the price stack",
-        "no_levels": "missing entry, stop or target",
+        "no_levels": "missing entry or target",
         "levels_incoherent": "stop and target on the same side of entry",
         "no_price_history": "priceable in principle, but no bars in the prices table",
         "not_triggered": "a watching call whose entry the tape has not reached",
@@ -220,7 +225,7 @@ class Coverage:
 
     def report(self) -> str:
         lines = [
-            f"cohort coverage — {self.considered} calls in the last "
+            f"{self.label} coverage — {self.considered} calls in the last "
             f"{self.window_days}d → {self.candidates} candidates"
         ]
         if self.priced_pct is not None:
@@ -367,20 +372,39 @@ def cohort_candidates(
 
     conn = read_connection(db_path)
     try:
+        # ── Whose clock? ─────────────────────────────────────────────
+        # `extracted_at` is when OUR pipeline read the chart. `published_at`
+        # is when the author posted it. Every time-based judgement here —
+        # the lookback window, the freshness decay, which sighting wins the
+        # per-symbol dedupe, and the `scored_at` the engine ages for
+        # STALE_THESIS — is a judgement about THE CALL, so it has to run on
+        # the author's clock.
+        #
+        # Keying off extracted_at means a re-extract resets the age of
+        # every call it touches. When 18 days of stalled chart flow were
+        # re-read in one pass on 2026-09-22, 185 signals for calls posted
+        # Sep 4–21 all landed stamped Sep 22: three-week-old setups looking
+        # brand new, and a book sizing them as if the room had just said
+        # them. `called_at` is the fix; extracted_at stays as the audit
+        # field it is, and is the fallback when a row has no document.
         rows = conn.execute(
             f"""
-            SELECT signal_id, document_id, asset_ticker, side, conviction,
-                   entry_zone_low, entry_zone_high, stop_loss, target_1, target_2,
-                   horizon, thesis_summary, instrument_detail_json,
-                   author_id, source_channel, extracted_at
-              FROM signals
-             WHERE status = 'active'
-               AND extractor_name = ?
-               AND extracted_at >= ?
-               AND author_id IN ({','.join('?' * len(cfg.author_ids))})
-             ORDER BY extracted_at DESC
+            SELECT s.signal_id, s.document_id, s.asset_ticker, s.side, s.conviction,
+                   s.entry_zone_low, s.entry_zone_high, s.stop_loss,
+                   s.target_1, s.target_2,
+                   s.horizon, s.thesis_summary, s.instrument_detail_json,
+                   s.author_id, s.source_channel, s.extracted_at,
+                   COALESCE(d.published_at, s.extracted_at) AS called_at
+              FROM signals s
+              LEFT JOIN documents d ON d.document_id = s.document_id
+             WHERE s.status = 'active'
+               AND s.extractor_name = ?
+               AND COALESCE(d.published_at, s.extracted_at) >= ?
+               AND COALESCE(d.published_at, s.extracted_at) <= ?
+               AND s.author_id IN ({','.join('?' * len(cfg.author_ids))})
+             ORDER BY COALESCE(d.published_at, s.extracted_at) DESC
             """,
-            (EXTRACTOR, cutoff, *cfg.author_ids),
+            (EXTRACTOR, cutoff, now.isoformat(), *cfg.author_ids),
         ).fetchall()
 
         cov.considered = len(rows)
@@ -405,21 +429,32 @@ def cohort_candidates(
                 skipped["unpriceable"] += 1
                 unpriced[(r["asset_ticker"] or "?").upper()] += 1
                 continue
+            # Priceable is not the same as in-mandate — see the note in
+            # stock_unlocked_book.py. The coin has a Coinbase book and a
+            # real mark; this desk still does not trade the alt tail.
+            if not book_tradeable(symbol):
+                skipped["crypto_not_major"] += 1
+                continue
 
             entry = _f(r["entry_zone_low"]) or _f(r["entry_zone_high"])
             stop = _f(r["stop_loss"])
             target = _f(r["target_1"]) or _f(r["target_2"])
-            if entry is None or stop is None or target is None:
+            if entry is None or target is None:
                 skipped["no_levels"] += 1
                 continue
 
             # An extraction can read a chart backwards. A long whose stop
             # sits above its entry, or whose target sits below it, is not a
             # trade the book can size — its "risk" and "reward" are the
-            # same direction.
-            long_ok = stop < entry < target
-            short_ok = stop > entry > target
-            if not (long_ok if side == "LONG" else short_ok):
+            # same direction. A call with no stop is only checked on the
+            # half it actually drew.
+            if stop is None:
+                coherent = entry < target if side == "LONG" else entry > target
+            else:
+                coherent = (
+                    stop < entry < target if side == "LONG" else stop > entry > target
+                )
+            if not coherent:
                 skipped["levels_incoherent"] += 1
                 continue
 
@@ -428,7 +463,33 @@ def cohort_candidates(
                 skipped["no_price_history"] += 1
                 continue
 
+            # A chart with a target and no stop is a normal thing for this
+            # crowd to post — the level is "obvious" on the picture and
+            # never typed. Skipping those threw away real calls; inventing
+            # a level off the chart's own structure would be the book
+            # deciding the trade, which is the one thing this book must not
+            # do. So: a flat house stop, `default_stop_pct` adverse of the
+            # price the book will actually pay. It is a position-sizing
+            # rule, not a reading of the chart, and it is tagged
+            # `stop_source` all the way through so no equity curve ever
+            # confuses it with a level the author drew.
+            stop_source = "author"
+            if stop is None:
+                stop_source = f"house_{cfg.default_stop_pct:.1%}"
+                stop = (
+                    mark * (1.0 - cfg.default_stop_pct)
+                    if side == "LONG"
+                    else mark * (1.0 + cfg.default_stop_pct)
+                )
+                # A house stop that is already further away than the target
+                # is not a trade, it is a coin flip with bad odds. The
+                # rr_live screen below catches it, but say so plainly.
+                if (target <= stop) if side == "LONG" else (target >= stop):
+                    skipped["levels_incoherent"] += 1
+                    continue
+
             # The stop already went. Whatever this chart was, it is over.
+            # (Never true of a house stop — it is derived from the mark.)
             if (mark <= stop) if side == "LONG" else (mark >= stop):
                 skipped["stop_breached"] += 1
                 continue
@@ -452,9 +513,10 @@ def cohort_candidates(
             kept.append({
                 "row": r, "detail": det, "symbol": symbol, "side": side,
                 "entry": entry, "stop": stop, "target": target,
+                "stop_source": stop_source,
                 "mark": mark, "rr": _rr(entry, stop, target), "rr_live": rr_live,
                 "live": live, "stage": stage,
-                "age": _age_days(r["extracted_at"], now) or 0.0,
+                "age": _age_days(r["called_at"], now) or 0.0,
             })
     finally:
         conn.close()
@@ -468,7 +530,7 @@ def cohort_candidates(
         voices[(c["symbol"], c["side"])].add(c["row"]["author_id"])
 
     # Pass 3 — one call per symbol: the freshest. `kept` is already in
-    # extracted_at DESC order, so the first sighting wins and every older
+    # called_at DESC order, so the first sighting wins and every older
     # call on that name is an update the room has moved past.
     reads: list[RankRead] = []
     seen: set[str] = set()
@@ -582,7 +644,7 @@ def _read_for(
         # which in a copy book is the exit that does the most work. Almost
         # no call is ever explicitly closed by its author; the room simply
         # stops mentioning the name.
-        scored_at=r["extracted_at"],
+        scored_at=r["called_at"],
         anchored=False,          # no distribution — see the module docstring
         raw=raw,
     )
@@ -593,13 +655,14 @@ def _read_for(
         "ticker": c["symbol"],
         "entry": c["entry"],
         "stop": c["stop"],
+        "stopSource": c.get("stop_source", "author"),
         "target": c["target"],
         "rr": round(rr, 2) if rr else None,
         "setup": " · ".join(x for x in (author, timeframe, pattern) if x),
         "hasLevels": True,
         "levelsReason": None,
         "levelProvenance": [{
-            "source": author, "at": r["extracted_at"], "kind": "cohort_call",
+            "source": author, "at": r["called_at"], "kind": "cohort_call",
         }],
         # The desk views the composed valuation would want. They are None
         # by design: this book does not re-decide the trade (see the
@@ -619,7 +682,8 @@ def _read_for(
             "timeframe": timeframe or None,
             "pattern": det.get("pattern"),
             "thesis": r["thesis_summary"],
-            "calledAt": r["extracted_at"],
+            "calledAt": r["called_at"],
+            "extractedAt": r["extracted_at"],
             "ageDays": round(c["age"], 2),
             "rrAsDrawn": round(rr, 2) if rr else None,
             "rrAtMark": round(c["rr_live"], 2),

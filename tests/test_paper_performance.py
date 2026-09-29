@@ -19,7 +19,8 @@ from macro_positioning.paper import store
 from macro_positioning.paper.models import Mandate
 from macro_positioning.paper.engine import run_tick
 from macro_positioning.paper.performance import build_trade_records, performance, summarize
-from macro_positioning.paper.sleeves import sleeve_for_ticker, coverage
+from macro_positioning.paper.sleeves import base_key, sleeve_for_ticker, coverage
+from macro_positioning.prices.symbol_map import book_tradeable
 
 from test_paper_engine import NOW, marks, read
 
@@ -60,6 +61,70 @@ def test_a_crypto_pair_resolves_on_its_base_asset():
     # lose those to `unclassified`.
     assert sleeve_for_ticker("SOL/USD").id == "crypto"
     assert sleeve_for_ticker("BTC/USDT").id == "crypto"
+
+
+def test_a_resolved_alt_coin_key_resolves_on_its_base_too():
+    # `resolve_symbol` keys a non-major Coinbase coin by its yfinance
+    # form so it can never be confused with the equity of the same name.
+    # Attribution has to see through that, or every alt the copy book
+    # ever held reads as unclassified.
+    assert base_key("AERO-USD") == "AERO"
+    assert base_key("BRK-B") == "BRK-B"       # a hyphenated equity, not a pair
+    assert sleeve_for_ticker("AERO-USD").id == "crypto_alts"
+    assert sleeve_for_ticker("PENGU-USD").class_id == "crypto"
+
+
+def test_majors_and_alts_are_separate_sleeves():
+    # Both are crypto, and reading the alt tail's P&L as ordinary crypto
+    # beta would flatter the majors. They roll up to one class, not one
+    # sleeve.
+    major, alt = sleeve_for_ticker("LINK"), sleeve_for_ticker("1INCH-USD")
+    assert (major.id, alt.id) == ("crypto", "crypto_alts")
+    assert major.class_id == alt.class_id == "crypto"
+
+
+def test_the_books_hold_anything_with_a_venue_and_nothing_without():
+    """The line is the VENUE, not the market cap.
+
+    This used to assert the opposite for the alt tail — PENGU and AERO
+    were excluded as "not a book this desk runs", which was a judgement
+    about size. The desk's real constraint is whether an order can be
+    filled: a Coinbase book means yes, and the tail is in. What stays out
+    is what has no venue at all — the DEX pairs this crowd posts by the
+    hundred, which also have no price feed to score against.
+    """
+    assert book_tradeable("BTC") and book_tradeable("LINK")
+    assert book_tradeable("NVDA") and book_tradeable("BRK.B")
+    # On Coinbase -> holdable, however small.
+    assert book_tradeable("PENGU-USD")
+    assert book_tradeable("AERO-USD")
+    assert book_tradeable("1INCH-USD")
+    # No Coinbase book -> the desk cannot fill it, whatever the chart says.
+    assert not book_tradeable("KINS-USD")
+    assert not book_tradeable("JOTCHUA-USD")
+    # And a DEX pair never resolves to a key in the first place.
+    from macro_positioning.prices.symbol_map import resolve_symbol
+    assert resolve_symbol("KINS/SOL") is None
+    assert resolve_symbol("SCHIFFY/GLD") is None
+
+
+def test_a_ticker_nobody_declared_is_placed_by_its_sector():
+    # The allowlist never named these — they are small-cap momentum the
+    # copy book bought because its channel called them. Their own sector
+    # is enough to place them, and before the fallback existed every one
+    # of them sat in `unclassified`.
+    assert sleeve_for_ticker("ABAT").id == "industrial_metals"   # explicit override
+    assert sleeve_for_ticker("AAOI").id == "technology_ai"       # Technology
+    assert sleeve_for_ticker("ABEO").id == "healthcare"          # Healthcare
+    assert sleeve_for_ticker("ULCC").id == "industrials"         # Industrials / Airlines
+    assert sleeve_for_ticker("SATL").id == "defense"             # Aerospace & Defense
+
+
+def test_the_listed_crypto_proxies_beat_their_screener_sector():
+    # A screener files the miners under Capital Markets. They are a
+    # levered bet on the coin, and the declared membership says so.
+    assert sleeve_for_ticker("IREN").id == "crypto"
+    assert sleeve_for_ticker("WULF").id == "crypto"
 
 
 def test_declaration_order_settles_a_ticker_claimed_twice():

@@ -4,9 +4,55 @@
 
   "$resolution_rules": {
     "order": "sleeves are evaluated in declaration order; the first whose membership contains the ticker wins",
-    "membership": "union of (a) the watchlist_tickers of the referenced `theme` in config/asset_themes.json, (b) the members of each referenced correlation `bucket`, and (c) the explicit `tickers` list here",
-    "unmatched": "falls through to the sleeve `unclassified`, which is reported honestly rather than silently folded into another sleeve",
+    "membership": "union of (a) the watchlist_tickers of the referenced `theme` in config/asset_themes.json, (b) the members of each referenced correlation `bucket`, (c) the coin list named by `crypto_universe` in config/crypto_universe.json, and (d) the explicit `tickers` list here",
+    "unmatched": "a ticker no sleeve claims is looked up in config/ticker_sectors.json and routed by `$sector_fallback` below; only a name nothing anywhere knows falls through to `unclassified`, which is then reported honestly rather than silently folded into another sleeve",
+    "explicit_wins": "the declared membership above always beats the sector fallback — that is how IREN and WULF are read as the crypto miners they are rather than the Capital Markets names a screener files them under",
     "resolution_time": "read time, not entry time — re-classifying a ticker here corrects history instead of leaving old positions mis-bucketed"
+  },
+
+  "$sector_fallback": {
+    "note": "Why this exists: the membership above is an allowlist of names this desk had already formed an opinion about — the index ETFs, the megacaps, the thematic baskets. The copy books trade whatever their channel posts, which is mostly small-cap momentum nobody had written down, so roughly sixty names sat in `unclassified` for no better reason than that. A ticker's own sector is enough to place it, and config/ticker_sectors.json carries that for every name the books have touched.",
+    "order": "by_industry is checked first, then by_sector. Industry is the one that carries the thesis — `Aerospace & Defense` is a defense name whether the screener filed its parent sector as Industrials or Technology, and `Other Industrial Metals & Mining` is the critical-minerals trade while its parent, Basic Materials, also holds the gold miners.",
+
+    "by_industry": {
+      "Aerospace & Defense": "defense",
+      "Gold": "precious_metals",
+      "Silver": "precious_metals",
+      "Other Precious Metals & Mining": "precious_metals",
+      "Uranium": "uranium",
+      "Copper": "industrial_metals",
+      "Aluminum": "industrial_metals",
+      "Steel": "industrial_metals",
+      "Coking Coal": "industrial_metals",
+      "Other Industrial Metals & Mining": "industrial_metals",
+      "Lumber & Wood Production": "industrial_metals",
+      "Agricultural Inputs": "agriculture",
+      "Farm Products": "agriculture",
+      "Packaged Foods": "agriculture",
+      "Thermal Coal": "energy",
+      "Uranium Mining": "uranium",
+      "Solar": "power_grid",
+      "Utilities - Renewable": "power_grid",
+      "Utilities - Independent Power Producers": "power_grid",
+      "Electrical Equipment & Parts": "power_grid",
+      "Consumer Electronics": "consumer_cyclical",
+      "Auto Manufacturers": "consumer_cyclical",
+      "Auto Parts": "consumer_cyclical"
+    },
+
+    "by_sector": {
+      "Technology": "technology_ai",
+      "Communication Services": "technology_ai",
+      "Healthcare": "healthcare",
+      "Energy": "energy",
+      "Basic Materials": "industrial_metals",
+      "Industrials": "industrials",
+      "Financial Services": "financials",
+      "Consumer Cyclical": "consumer_cyclical",
+      "Consumer Defensive": "defensives",
+      "Real Estate": "defensives",
+      "Utilities": "defensives"
+    }
   },
 
   "classes": {
@@ -25,12 +71,23 @@
   "sleeves": [
     {
       "id": "crypto",
-      "label": "Crypto",
+      "label": "Crypto — majors",
       "class": "crypto",
       "theme": "crypto",
       "buckets": ["crypto_l1", "crypto_alt"],
-      "tickers": ["MSTR", "HOOD", "BITO", "IBIT", "GBTC"],
-      "regimes": ["risk_on_expansion", "monetary_debasement_hard_asset"]
+      "crypto_universe": "majors",
+      "tickers": ["MSTR", "HOOD", "BITO", "IBIT", "GBTC", "ETHE",
+                  "IREN", "WULF", "RIOT", "MARA", "CLSK", "CIFR", "HUT", "CORZ"],
+      "regimes": ["risk_on_expansion", "monetary_debasement_hard_asset"],
+      "note": "The coins come from config/crypto_universe.json `majors`, so a listing change arrives here through scripts/refresh_crypto_universe.py rather than by hand. The tickers are the listed proxies — treasuries, ETFs and the miners, which a sector screener files under Capital Markets and which are nothing of the sort."
+    },
+    {
+      "id": "crypto_alts",
+      "label": "Crypto — non-major alts",
+      "class": "crypto",
+      "crypto_universe": "coinbase",
+      "regimes": ["risk_on_expansion"],
+      "note": "Every other Coinbase-listed coin. The books no longer OPEN these — see `book_tradeable` in prices/symbol_map.py — but the replayed history holds seventeen of them, and reading that P&L as ordinary crypto beta would flatter the majors. Kept as its own sleeve so the alt tail is attributable on its own."
     },
     {
       "id": "precious_metals",
@@ -55,9 +112,19 @@
       "label": "Copper & industrial metals",
       "class": "hard_assets",
       "tickers": ["FCX", "COPX", "CPER", "XLB", "SCCO", "TECK", "RIO", "BHP", "VALE",
-                  "X", "NUE", "AA", "MP", "ALB", "LIT", "REMX"],
+                  "X", "NUE", "AA", "MP", "ALB", "LIT", "REMX",
+                  "ABAT", "UAMY", "USAR"],
       "regimes": ["commodity_led_inflation", "risk_on_expansion"],
       "note": "The electrification / grid-buildout expression. Absent from asset_themes.json, which is why three of the book's first twelve positions had no classification."
+    },
+    {
+      "id": "power_grid",
+      "label": "Power & grid buildout",
+      "class": "equities",
+      "tickers": ["EOSE", "NRGV", "FLNC", "STEM", "GEV", "VST", "CEG", "TLN",
+                  "PWR", "SHLS", "ENPH", "FSLR", "TAN", "ICLN", "GRID"],
+      "regimes": ["risk_on_expansion", "commodity_led_inflation"],
+      "note": "Storage, generation and the wires — the demand side of the same electrification trade `industrial_metals` owns the supply side of. Absent until the copy book bought EOSE and NRGV and neither had anywhere to go."
     },
     {
       "id": "energy",
@@ -91,7 +158,7 @@
       "class": "equities",
       "theme": "defense",
       "buckets": ["defense"],
-      "tickers": ["KTOS", "AVAV", "RHM", "BA"],
+      "tickers": ["KTOS", "AVAV", "RHM", "BA", "ONDS", "UMAC", "SATL", "ACHR", "TXT"],
       "regimes": ["risk_off_contraction", "commodity_led_inflation"]
     },
     {
