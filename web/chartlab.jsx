@@ -31,41 +31,41 @@ function clPct(v) {
 // ---------------------------------------------------------------------------
 
 function ChartDrop({ onParked }) {
-  const [busy, setBusy] = React.useState(false);
+  const [busy, setBusy] = React.useState(0);
   const [err, setErr] = React.useState(null);
-  const [ticker, setTicker] = React.useState("");
-  const [timeframe, setTimeframe] = React.useState("1D");
-  const [note, setNote] = React.useState("");
   const [over, setOver] = React.useState(false);
   const fileRef = React.useRef(null);
 
-  const send = React.useCallback((files) => {
-    const file = files && files[0];
-    if (!file) return;
-    setBusy(true); setErr(null);
+  // Charts arrive as a batch off one screen and each one is about a
+  // different ticker, so nothing is declared here. The queue below asks
+  // per chart, which is the only order that survives a six-file drop.
+  const send = React.useCallback((fileList) => {
+    const files = [...(fileList || [])].filter(f => f && f.type.startsWith("image/"));
+    if (!files.length) return;
+    setBusy(files.length); setErr(null);
     const fd = new FormData();
-    fd.append("file", file);
-    if (ticker) fd.append("ticker", ticker);
-    if (timeframe) fd.append("timeframe", timeframe);
-    if (note) fd.append("note", note);
+    files.forEach(f => fd.append("files", f));
     fetch("/api/chartlab/drop", { method: "POST", body: fd })
       .then(r => (r.ok ? r.json() : r.json().then(j => Promise.reject(j.detail || r.status))))
-      .then(j => { setNote(""); onParked && onParked(j); })
+      .then(j => {
+        const bad = j.errors || [];
+        if (bad.length) setErr(bad.map(e => `${e.filename}: ${e.error}`).join(" · "));
+        onParked && onParked(j);
+      })
       .catch(e => setErr(String(e)))
-      .finally(() => setBusy(false));
-  }, [ticker, timeframe, note, onParked]);
+      .finally(() => setBusy(0));
+  }, [onParked]);
 
   // Paste-from-clipboard: the shortest route from a chart on screen to a
   // chart parked, and the reason this page exists rather than the CLI.
   React.useEffect(() => {
     function onPaste(e) {
       const items = (e.clipboardData && e.clipboardData.items) || [];
-      for (const it of items) {
-        if (it.type && it.type.startsWith("image/")) {
-          const f = it.getAsFile();
-          if (f) { send([f]); return; }
-        }
-      }
+      const imgs = [...items]
+        .filter(it => it.type && it.type.startsWith("image/"))
+        .map(it => it.getAsFile())
+        .filter(Boolean);
+      if (imgs.length) send(imgs);
     }
     document.addEventListener("paste", onPaste);
     return () => document.removeEventListener("paste", onPaste);
@@ -76,62 +76,185 @@ function ChartDrop({ onParked }) {
       <header className="block-head">
         <div className="block-title">
           <span className="block-num mono">U4</span>
-          <span>Drop a chart</span>
+          <span>Drop charts</span>
           <span className="block-sub">desk read · never counts as a trusted voice</span>
         </div>
       </header>
       <div className="block-body">
-      <div className="cl-meta">
-        <input className="cl-input" placeholder="ticker (RIG)" value={ticker}
-               onChange={e => setTicker(e.target.value.toUpperCase())} />
-        <input className="cl-input cl-input-sm" placeholder="1D" value={timeframe}
-               onChange={e => setTimeframe(e.target.value)} />
-        <input className="cl-input cl-input-wide" placeholder="note — what you see"
-               value={note} onChange={e => setNote(e.target.value)} />
-      </div>
-      <div
-        className={`cl-dropzone${over ? " is-over" : ""}${busy ? " is-busy" : ""}`}
-        onDragOver={e => { e.preventDefault(); setOver(true); }}
-        onDragLeave={() => setOver(false)}
-        onDrop={e => { e.preventDefault(); setOver(false); send(e.dataTransfer.files); }}
-        onClick={() => fileRef.current && fileRef.current.click()}
-      >
-        {busy ? "parking…" : "drop a chart · paste from clipboard · or click to pick"}
-        <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }}
-               onChange={e => send(e.target.files)} />
-      </div>
-      {err && <div className="cl-err">{err}</div>}
+        <div
+          className={`cl-dropzone${over ? " is-over" : ""}${busy ? " is-busy" : ""}`}
+          onDragOver={e => { e.preventDefault(); setOver(true); }}
+          onDragLeave={() => setOver(false)}
+          onDrop={e => { e.preventDefault(); setOver(false); send(e.dataTransfer.files); }}
+          onClick={() => fileRef.current && fileRef.current.click()}
+        >
+          {busy
+            ? `parking ${busy} ${busy === 1 ? "chart" : "charts"}…`
+            : "drop charts · paste from clipboard · or click to pick"}
+          <div className="cl-dropzone-sub">
+            several at once is fine — tag each one below
+          </div>
+          <input ref={fileRef} type="file" accept="image/*" multiple
+                 style={{ display: "none" }}
+                 onChange={e => { send(e.target.files); e.target.value = ""; }} />
+        </div>
+        {err && <div className="cl-err">{err}</div>}
       </div>
     </div>
   );
 }
 
-function ChartQueue({ charts, onRead, reading, onPick }) {
+// ---------------------------------------------------------------------------
+// The queue — one row per parked chart, tagged where it sits
+// ---------------------------------------------------------------------------
+
+// A chart's declared metadata is what the read is handed and what the
+// bench follows, so the row edits it in place rather than sending the
+// operator somewhere else. Saves happen on change (selects) and on blur
+// (free text): a Save button per row is one more thing to forget.
+function ChartRow({ chart, vocab, onRead, reading, onSaved, onDeleted }) {
+  const [ticker, setTicker] = React.useState(chart.ticker || "");
+  const [timeframe, setTimeframe] = React.useState(chart.timeframe || "");
+  const [cls, setCls] = React.useState(chart.asset_class || "");
+  const [note, setNote] = React.useState(chart.note || "");
+  const [state, setState] = React.useState(null);   // saving | saved | error text
+  const [confirming, setConfirming] = React.useState(false);
+  const [zoom, setZoom] = React.useState(false);
+
+  // A row remounts on every list refresh; keep it showing what the
+  // server last confirmed rather than a stale local draft.
+  React.useEffect(() => {
+    setTicker(chart.ticker || ""); setTimeframe(chart.timeframe || "");
+    setCls(chart.asset_class || ""); setNote(chart.note || "");
+  }, [chart.document_id, chart.ticker, chart.timeframe, chart.asset_class, chart.note]);
+
+  const save = React.useCallback((patch) => {
+    const body = {
+      ticker, timeframe, note, asset_class: cls,
+      ...patch,
+    };
+    const unchanged =
+      (body.ticker || "") === (chart.ticker || "") &&
+      (body.timeframe || "") === (chart.timeframe || "") &&
+      (body.asset_class || "") === (chart.asset_class || "") &&
+      (body.note || "") === (chart.note || "");
+    if (unchanged) return;
+    setState("saving");
+    fetch(`/api/chartlab/chart/${chart.document_id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(r => (r.ok ? r.json() : r.json().then(j => Promise.reject(j.detail || r.status))))
+      .then(() => { setState("saved"); onSaved && onSaved(); })
+      .catch(e => setState(String(e)));
+  }, [chart, ticker, timeframe, cls, note, onSaved]);
+
+  function remove() {
+    setState("saving");
+    fetch(`/api/chartlab/chart/${chart.document_id}`, { method: "DELETE" })
+      .then(r => (r.ok ? r.json() : r.json().then(j => Promise.reject(j.detail || r.status))))
+      .then(j => onDeleted && onDeleted(j))
+      .catch(e => { setState(String(e)); setConfirming(false); });
+  }
+
+  const untagged = !ticker;
+  const gone = chart.has_read ? (chart.removed_signals || 0) : 0;
+
+  return (
+    <div className={`cl-queue-row${untagged ? " is-untagged" : ""}`}>
+      <div className="cl-queue-top">
+        {chart.image_url
+          ? <img className="cl-thumb" src={chart.image_url} alt=""
+                 title="click to enlarge" onClick={() => setZoom(z => !z)} />
+          : <div className="cl-thumb cl-thumb-none" />}
+
+        <input
+          className="cl-input cl-input-tkr" list="cl-tickers" placeholder="ticker"
+          value={ticker}
+          onChange={e => setTicker(e.target.value.toUpperCase())}
+          onBlur={() => save({})}
+          onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+        />
+        <select className="cl-input cl-select" value={timeframe}
+                onChange={e => { setTimeframe(e.target.value); save({ timeframe: e.target.value }); }}>
+          <option value="">tf</option>
+          {(vocab.timeframes || []).map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select className="cl-input cl-select" value={cls}
+                onChange={e => { setCls(e.target.value); save({ asset_class: e.target.value }); }}>
+          <option value="">class</option>
+          {(vocab.asset_classes || []).map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
+
+      {zoom && chart.image_url &&
+        <img className="cl-zoom" src={chart.image_url} alt=""
+             onClick={() => setZoom(false)} />}
+
+      <div className="cl-queue-bot">
+        <input className="cl-input cl-input-note" placeholder="note — what you see"
+               value={note}
+               onChange={e => setNote(e.target.value)}
+               onBlur={() => save({})}
+               onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }} />
+
+        {chart.has_read
+          ? <span className="cl-badge cl-badge-ok">read</span>
+          : (
+            <button className="btn-mini" disabled={reading === chart.document_id}
+                    onClick={() => onRead(chart)}>
+              {reading === chart.document_id ? "reading…" : "read"}
+            </button>
+          )}
+
+        {confirming
+          ? (
+            <span className="cl-confirm">
+              <button className="btn-mini cl-danger" onClick={remove}>delete</button>
+              <button className="btn-mini" onClick={() => setConfirming(false)}>keep</button>
+            </span>
+          )
+          : (
+            <button className="cl-x" title="remove this chart"
+                    onClick={() => setConfirming(true)}>×</button>
+          )}
+      </div>
+
+      <div className="cl-queue-foot muted">
+        <span>{(chart.ingested_at || "").slice(0, 16).replace("T", " ")}</span>
+        {state === "saving" && <span>saving…</span>}
+        {state === "saved" && <span className="cl-saved">saved</span>}
+        {state && state !== "saving" && state !== "saved" &&
+          <span className="cl-save-err">{state}</span>}
+        {confirming &&
+          <span className="cl-save-err">
+            {chart.has_read
+              ? "deletes the chart and the signals its read emitted"
+              : "deletes the chart and its image"}
+          </span>}
+        {chart.has_read && !confirming &&
+          <span>a read is on file — re-read to move it</span>}
+      </div>
+    </div>
+  );
+}
+
+function ChartQueue({ charts, vocab, onRead, reading, onSaved, onDeleted }) {
   if (!charts || !charts.length) {
-    return <div className="muted cl-empty">No desk charts yet. Drop one above.</div>;
+    return <div className="muted cl-empty">No desk charts yet. Drop some above.</div>;
   }
   return (
     <div className="cl-queue">
+      <datalist id="cl-tickers">
+        {(vocab.tickers || []).map(t => <option key={t} value={t} />)}
+      </datalist>
       {charts.map(c => (
-        <div className="cl-queue-row" key={c.document_id}>
-          {c.image_url
-            ? <img className="cl-thumb" src={c.image_url} alt="" onClick={() => onPick(c)} />
-            : <div className="cl-thumb cl-thumb-none" />}
-          <div className="cl-queue-body">
-            <div className="cl-queue-title">{c.caption || c.title || "(no caption)"}</div>
-            <div className="cl-queue-sub muted">
-              {(c.ingested_at || "").slice(0, 16).replace("T", " ")}
-            </div>
-          </div>
-          {c.has_read
-            ? <span className="cl-badge cl-badge-ok">read</span>
-            : (
-              <button className="btn-mini" disabled={reading === c.document_id}
-                      onClick={() => onRead(c)}>
-                {reading === c.document_id ? "reading…" : "read it"}
-              </button>
-            )}
-        </div>
+        <ChartRow
+          key={c.document_id} chart={c} vocab={vocab}
+          onRead={onRead} reading={reading}
+          onSaved={onSaved} onDeleted={onDeleted}
+        />
       ))}
     </div>
   );
@@ -384,11 +507,13 @@ function BenchCard({ card }) {
 
 function ChartLab() {
   const [charts, setCharts] = React.useState([]);
+  const [vocab, setVocab] = React.useState({});
   const [ticker, setTicker] = React.useState("");
   const [card, setCard] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
   const [reading, setReading] = React.useState(null);
   const [err, setErr] = React.useState(null);
+  const [note, setNote] = React.useState(null);
 
   const loadCharts = React.useCallback(() => {
     fetch("/api/chartlab/charts?limit=25")
@@ -398,6 +523,24 @@ function ChartLab() {
   }, []);
 
   React.useEffect(loadCharts, [loadCharts]);
+
+  // The picklists come from the server so they stay in lockstep with
+  // the extraction contract instead of being retyped here.
+  React.useEffect(() => {
+    fetch("/api/chartlab/vocab")
+      .then(r => r.json())
+      .then(setVocab)
+      .catch(() => {});
+  }, []);
+
+  function onDeleted(res) {
+    const rm = (res && res.removed) || {};
+    const bits = [];
+    if (rm.signals) bits.push(`${rm.signals} signal${rm.signals === 1 ? "" : "s"}`);
+    if (rm.call_outcomes) bits.push(`${rm.call_outcomes} scored call${rm.call_outcomes === 1 ? "" : "s"}`);
+    setNote(bits.length ? `Chart deleted — ${bits.join(" and ")} went with it.` : "Chart deleted.");
+    loadCharts();
+  }
 
   const runBench = React.useCallback((t) => {
     const want = (t || "").trim().toUpperCase();
@@ -425,10 +568,7 @@ function ChartLab() {
   return (
     <div className="cl-view">
       <div className="cl-left">
-        <ChartDrop onParked={j => {
-          loadCharts();
-          if (j.ticker) setTicker(j.ticker);
-        }} />
+        <ChartDrop onParked={() => { setNote(null); loadCharts(); }} />
         <div className="block">
           <header className="block-head">
             <div className="block-title">
@@ -443,9 +583,15 @@ function ChartLab() {
             </div>
           </header>
           <div className="block-body">
+            {note && (
+              <div className="cl-note-bar">
+                {note}
+                <button className="cl-x" onClick={() => setNote(null)}>×</button>
+              </div>
+            )}
             <ChartQueue
-              charts={charts} onRead={readChart} reading={reading}
-              onPick={c => { if (c.has_read) loadCharts(); }}
+              charts={charts} vocab={vocab} onRead={readChart} reading={reading}
+              onSaved={loadCharts} onDeleted={onDeleted}
             />
           </div>
         </div>

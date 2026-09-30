@@ -140,9 +140,7 @@ def add_chart(
     now = datetime.now(UTC).isoformat()
     source_id = desk_source_id(label)
 
-    caption_bits = [b for b in (ticker_norm, timeframe, note) if b]
-    caption = " · ".join(caption_bits)
-    title = " · ".join([b for b in (ticker_norm, timeframe, "chart lab") if b])
+    caption, title = _caption_for(ticker_norm, timeframe, note)
 
     tags_payload = {
         "tags": sorted({"manual", "chart", "vision", "chartlab"}),
@@ -171,7 +169,7 @@ def add_chart(
             (
                 document_id,
                 source_id,
-                title or "Chart lab drop",
+                title,
                 None,
                 now,
                 DESK_AUTHOR_NAME,
@@ -198,6 +196,240 @@ def add_chart(
     )
 
 
+def _caption_for(
+    ticker: str | None, timeframe: str | None, note: str, asset_class: str | None = None
+) -> tuple[str, str]:
+    """(caption, title) for a drop's declared metadata.
+
+    One place, so `add_chart` and `update_chart_meta` cannot drift into
+    describing the same chart two different ways.
+    """
+    caption = " · ".join(b for b in (ticker, timeframe, asset_class, note) if b)
+    title = " · ".join([b for b in (ticker, timeframe, "chart lab") if b])
+    return caption, (title or "Chart lab drop")
+
+
+def _require_desk_chart(conn: sqlite3.Connection, document_id: str) -> sqlite3.Row:
+    """Fetch a document and refuse it unless it is a desk chart drop.
+
+    Both callers below mutate or destroy a row by id alone, so the
+    namespace check is the whole safety story: without it the chart-lab
+    HTTP surface would be a general delete/edit for any of the ~56k
+    documents in the desk's database.
+    """
+    row = conn.execute(
+        "SELECT * FROM documents WHERE document_id = ?", (document_id,)
+    ).fetchone()
+    if row is None:
+        raise KeyError(f"no such document: {document_id}")
+    if not str(row["source_id"] or "").startswith(DESK_SOURCE_PREFIX):
+        raise PermissionError(
+            f"{document_id} is not a chart-lab drop "
+            f"(source_id={row['source_id']!r}) — refusing to touch it"
+        )
+    return row
+
+
+# Every table that keys rows off documents.document_id. A misadded chart
+# that was already read has emitted signals; leaving them behind means
+# the delete only hides the chart while its readings keep feeding the
+# conviction and positioning maps.
+_DOC_CHILD_TABLES = (
+    "signals",
+    "signal_extraction_attempts",
+    "call_outcomes",
+    "manual_chart_attachments",
+)
+
+
+def update_chart_meta(
+    document_id: str,
+    *,
+    ticker: str | None = None,
+    timeframe: str | None = None,
+    note: str | None = None,
+    asset_class: str | None = None,
+) -> dict:
+    """Re-declare what a parked chart is: ticker, timeframe, class, note.
+
+    This is the operator's declaration, not the read. It is the caption
+    the vision pass is given and the ticker hint the bench follows, so
+    fixing it before a read changes the read. It deliberately does NOT
+    rewrite an extraction already on file — a read is evidence of what
+    the model saw, and silently retyping its ticker would leave the
+    emitted signals disagreeing with the document they came from.
+    Re-read the chart to move a read.
+    """
+    ticker_norm = (ticker or "").strip().upper() or None
+    tf = (timeframe or "").strip() or None
+    cls = (asset_class or "").strip().lower() or None
+    note_txt = (note or "").strip()
+
+    with _connect() as conn:
+        row = _require_desk_chart(conn, document_id)
+        try:
+            tags = json.loads(row["tags_json"] or "{}")
+        except (TypeError, ValueError):
+            tags = {}
+        try:
+            meta = json.loads(row["user_metadata_json"] or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+
+        tags["tickers"] = [ticker_norm] if ticker_norm else []
+        meta["user"] = {
+            "ticker": ticker_norm,
+            "timeframe": tf,
+            "note": note_txt,
+            "asset_class": cls,
+        }
+        caption, title = _caption_for(ticker_norm, tf, note_txt, cls)
+
+        conn.execute(
+            """
+            UPDATE documents
+               SET raw_text = ?, cleaned_text = ?, title = ?,
+                   tags_json = ?, user_metadata_json = ?
+             WHERE document_id = ?
+            """,
+            (
+                caption,
+                caption,
+                title,
+                json.dumps(tags),
+                json.dumps(meta),
+                document_id,
+            ),
+        )
+        conn.commit()
+
+    return {
+        "document_id": document_id,
+        "ticker": ticker_norm,
+        "timeframe": tf,
+        "asset_class": cls,
+        "note": note_txt,
+        "caption": caption,
+    }
+
+
+def delete_chart(document_id: str, *, remove_file: bool = True) -> dict:
+    """Delete a misadded desk chart, its signals, and its image.
+
+    Refuses any document outside the desk namespace. Returns the row
+    counts removed so the caller can say what actually went.
+    """
+    removed: dict[str, int] = {}
+    paths: list[str] = []
+
+    with _connect() as conn:
+        row = _require_desk_chart(conn, document_id)
+        for key in ("attachment_path",):
+            if row[key]:
+                paths.append(str(row[key]))
+        try:
+            extra = json.loads(row["attachment_paths_json"] or "[]")
+        except (TypeError, ValueError):
+            extra = []
+        paths += [str(p) for p in extra if p]
+
+        for table in _DOC_CHILD_TABLES:
+            cur = conn.execute(
+                f"DELETE FROM {table} WHERE document_id = ?", (document_id,)  # noqa: S608
+            )
+            if cur.rowcount:
+                removed[table] = cur.rowcount
+        conn.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
+        conn.commit()
+
+        # Only orphan images go. A path shared with another document
+        # (a re-drop of the same screenshot) stays on disk.
+        still_used = set()
+        for path in set(paths):
+            hit = conn.execute(
+                "SELECT 1 FROM documents WHERE attachment_path = ? LIMIT 1", (path,)
+            ).fetchone()
+            if hit:
+                still_used.add(path)
+
+    files_removed = 0
+    if remove_file:
+        upload_root = Path(settings.chart_upload_dir).resolve()
+        for rel in set(paths) - still_used:
+            abs_path = Path(rel)
+            if not abs_path.is_absolute():
+                abs_path = Path(settings.base_dir) / rel
+            try:
+                resolved = abs_path.resolve()
+                # Never unlink outside the upload directory, whatever the
+                # column happens to say.
+                resolved.relative_to(upload_root)
+            except (OSError, ValueError):
+                continue
+            if resolved.is_file():
+                resolved.unlink(missing_ok=True)
+                files_removed += 1
+
+    removed["documents"] = 1
+    removed["files"] = files_removed
+    return {"document_id": document_id, "removed": removed}
+
+
+def vocabulary(*, ticker_limit: int = 150) -> dict:
+    """The picklists the drop form offers.
+
+    Timeframes and asset classes are split out of SECTION_10_TEMPLATE
+    rather than retyped, so the form can only ever offer values the
+    extraction contract already accepts.
+
+    Tickers are what the desk has actually been talking about, put
+    through `resolve_symbol` first: raw `signals.asset_ticker` carries
+    exchange pairs (`BTC/USDT`), DEX tokens and the odd `N/A`, and the
+    house rule is that discovery surfaces show real assets. The resolver
+    also collapses a pair onto its base, so `BTC/USDT` and `BTC/USD`
+    suggest one `BTC`. It is a suggestion list, not a constraint — the
+    field stays free text for anything the resolver has not met.
+    """
+    from macro_positioning.prices.symbol_map import resolve_symbol
+
+    def _options(field: str) -> list[str]:
+        raw = str(SECTION_10_TEMPLATE.get(field) or "")
+        return [
+            part.strip()
+            for part in raw.split("|")
+            if part.strip() and part.strip() != "null"
+        ]
+
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT asset_ticker, COUNT(*) AS n
+              FROM signals
+             WHERE extracted_at >= date('now', '-180 day')
+               AND asset_ticker IS NOT NULL AND asset_ticker <> ''
+             GROUP BY asset_ticker
+             ORDER BY n DESC
+            """
+        ).fetchall()
+
+    tickers: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        resolved = resolve_symbol(str(row["asset_ticker"]))
+        if not resolved or resolved in seen:
+            continue
+        seen.add(resolved)
+        tickers.append(resolved)
+        if len(tickers) >= int(ticker_limit):
+            break
+
+    return {
+        "timeframes": _options("timeframe"),
+        "asset_classes": _options("asset_class"),
+        "tickers": tickers,
+    }
+
+
 def get_chart(document_id: str) -> dict | None:
     """The full document row for a chart, or None."""
     with _connect() as conn:
@@ -211,7 +443,7 @@ def list_charts(*, limit: int = 20, ticker: str | None = None) -> list[dict]:
     """Recent desk chart drops, newest first."""
     sql = [
         "SELECT document_id, title, raw_text, attachment_path, ingested_at,",
-        "       extracted_features_json, tags_json",
+        "       extracted_features_json, tags_json, user_metadata_json",
         "FROM documents",
         "WHERE source_id LIKE ?",
     ]

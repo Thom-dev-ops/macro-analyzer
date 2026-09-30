@@ -498,3 +498,166 @@ def test_bench_route_returns_the_card_shape(client, monkeypatch):
 
 def test_bench_route_rejects_a_bad_side(client):
     assert client.get("/api/chartlab/bench/BTC?side=SIDEWAYS").status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Editing and binning a drop
+#
+# Delete is the one operation here that destroys desk history, so the
+# guarantees worth pinning are that it reaches everything the chart
+# spawned and that it cannot be pointed at anything outside the desk
+# namespace by id alone.
+# ---------------------------------------------------------------------------
+
+def test_update_chart_meta_redeclares_the_caption(db, chart_image):
+    from macro_positioning.chartlab import store
+
+    drop = store.add_chart(chart_image, ticker="BTC", timeframe="1D")
+    store.update_chart_meta(
+        drop.document_id, ticker="rig", timeframe="4h", asset_class="equity",
+        note="base reclaim",
+    )
+
+    row = store.get_chart(drop.document_id)
+    assert "RIG" in row["raw_text"] and "4h" in row["raw_text"]
+    assert "BTC" not in row["raw_text"], "the old declaration is replaced, not appended"
+    declared = json.loads(row["user_metadata_json"])["user"]
+    assert declared == {
+        "ticker": "RIG", "timeframe": "4h", "note": "base reclaim",
+        "asset_class": "equity",
+    }
+    assert json.loads(row["tags_json"])["tickers"] == ["RIG"]
+
+
+def test_update_chart_meta_leaves_an_existing_read_alone(db, chart_image):
+    """A read is evidence of what the model saw; retyping it would leave
+    the emitted signals disagreeing with their own document."""
+    from macro_positioning.chartlab import store
+
+    drop = store.add_chart(chart_image, ticker="BTC")
+    store.write_extraction(drop.document_id, _read(), extract_signals=False)
+    store.update_chart_meta(drop.document_id, ticker="RIG")
+
+    feats = json.loads(store.get_chart(drop.document_id)["extracted_features_json"])
+    assert feats["ticker"] == "BTC"
+
+
+def test_delete_chart_takes_the_row_the_signals_and_the_image(db, chart_image):
+    from macro_positioning.chartlab import store
+    from macro_positioning.core.settings import settings
+
+    drop = store.add_chart(chart_image, ticker="BTC")
+    stored = Path(settings.base_dir) / drop.attachment_path
+    assert stored.is_file()
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            INSERT INTO signals (signal_id, document_id, extracted_at,
+                                 asset_ticker, side, conviction, source_slug,
+                                 extractor_name, extractor_version)
+            VALUES ('s1', ?, '2026-09-30T00:00:00Z', 'BTC', 'LONG', 3.0,
+                    'desk:chartlab', 'manual_chart', 'v1')
+            """,
+            (drop.document_id,),
+        )
+        conn.commit()
+
+    out = store.delete_chart(drop.document_id)
+
+    assert out["removed"]["signals"] == 1
+    assert out["removed"]["documents"] == 1
+    assert out["removed"]["files"] == 1
+    assert store.get_chart(drop.document_id) is None
+    assert not stored.exists(), "a binned chart must not leave its image behind"
+    with sqlite3.connect(db) as conn:
+        left = conn.execute(
+            "SELECT COUNT(*) FROM signals WHERE document_id = ?", (drop.document_id,)
+        ).fetchone()[0]
+    assert left == 0, (
+        "signals from a misadded chart would keep feeding the conviction "
+        "and positioning maps"
+    )
+
+
+def test_delete_chart_refuses_a_document_outside_the_desk_namespace(db):
+    """The route takes a bare document_id — the namespace check is the
+    only thing between it and any of the desk's other documents."""
+    from macro_positioning.chartlab import store
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            INSERT INTO documents (
+                document_id, source_id, title, published_at, content_type,
+                raw_text, cleaned_text, tags_json, ingested_at
+            ) VALUES ('foreign', 'telegram:feather_hands', 'someone else',
+                      '2026-09-30', 'telegram_message', 'x', 'x', '{}',
+                      '2026-09-30')
+            """
+        )
+        conn.commit()
+
+    with pytest.raises(PermissionError):
+        store.delete_chart("foreign")
+    with pytest.raises(PermissionError):
+        store.update_chart_meta("foreign", ticker="RIG")
+    assert store.get_chart("foreign") is not None
+
+    with pytest.raises(KeyError):
+        store.delete_chart("nope")
+
+
+def test_drop_route_parks_a_batch_and_names_the_one_that_failed(client, chart_image):
+    png = chart_image.read_bytes()
+    resp = client.post(
+        "/api/chartlab/drop",
+        files=[
+            ("files", ("a.png", png, "image/png")),
+            ("files", ("b.png", png, "image/png")),
+            ("files", ("notes.txt", b"not a chart", "text/plain")),
+        ],
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["drops"]) == 2, "one bad file must not sink the good ones"
+    assert [e["filename"] for e in body["errors"]] == ["notes.txt"]
+    assert body["document_id"] == body["drops"][0]["document_id"], (
+        "single-file callers still read the first drop off the top level"
+    )
+    assert len(client.get("/api/chartlab/charts").json()["charts"]) == 2
+
+
+def test_chart_routes_patch_delete_and_guard(client, chart_image):
+    with chart_image.open("rb") as fh:
+        doc = client.post(
+            "/api/chartlab/drop", files={"file": ("chart.png", fh, "image/png")}
+        ).json()
+    doc_id = doc["document_id"]
+
+    patched = client.patch(
+        f"/api/chartlab/chart/{doc_id}",
+        json={"ticker": "rig", "timeframe": "1D", "asset_class": "equity"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["ticker"] == "RIG"
+
+    listed = client.get("/api/chartlab/charts").json()["charts"][0]
+    assert (listed["ticker"], listed["timeframe"]) == ("RIG", "1D")
+
+    assert client.delete("/api/chartlab/chart/nope").status_code == 404
+    assert client.delete(f"/api/chartlab/chart/{doc_id}").status_code == 200
+    assert client.get("/api/chartlab/charts").json()["charts"] == []
+
+
+def test_vocab_route_offers_only_contract_values(client):
+    from macro_positioning.chartlab.store import SECTION_10_TEMPLATE
+
+    body = client.get("/api/chartlab/vocab").json()
+    assert "1D" in body["timeframes"] and "null" not in body["timeframes"]
+    assert "crypto" in body["asset_classes"]
+    for field, key in (("timeframe", "timeframes"), ("asset_class", "asset_classes")):
+        allowed = {p.strip() for p in SECTION_10_TEMPLATE[field].split("|")}
+        assert set(body[key]) <= allowed, (
+            "the form must not offer a value the extraction contract rejects"
+        )

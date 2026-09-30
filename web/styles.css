@@ -5880,7 +5880,7 @@ body { font-size: 15.5px; }
    Appended as a self-contained block: several sessions edit this file,
    so the tab brings its own namespaced rules rather than reaching into
    shared ones. Every selector is prefixed `cl-`. */
-.cl-view { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+.cl-view { display: grid; grid-template-columns: minmax(340px, 430px) minmax(0, 1fr);
   gap: var(--gap-block); align-items: start; }
 @media (max-width: 1100px) { .cl-view { grid-template-columns: 1fr; } }
 .cl-left, .cl-right { min-width: 0; }
@@ -5891,14 +5891,15 @@ body { font-size: 15.5px; }
 .cl-view .block-sub { flex: 1 0 100%; font-style: normal; }
 .cl-view .block-body { padding: 12px var(--pad-card) var(--pad-card-y); }
 
-/* Ticker and timeframe share a row; the note owns the one below it. Three
-   inputs abreast in a 380px column is what made the form feel cramped. */
-.cl-meta { display: grid; grid-template-columns: minmax(0, 1fr) 78px; gap: 8px; margin-bottom: 10px; }
 .cl-input { min-width: 0; padding: 8px 10px; border: 1px solid var(--line);
-  border-radius: 7px; background: var(--bg-inset); color: var(--text); font-size: 13px; }
+  border-radius: 7px; background: var(--bg-inset); color: var(--text); font-size: 13px;
+  font-family: inherit; }
 .cl-input:focus { outline: none; border-color: var(--accent); }
-.cl-input-sm { text-align: center; }
-.cl-input-wide { grid-column: 1 / -1; }
+.cl-select { appearance: none; padding-right: 20px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-mute-2) 50%),
+                    linear-gradient(135deg, var(--text-mute-2) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 52%, calc(100% - 8px) 52%;
+  background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
 .cl-input-bench { flex: 0 1 420px; padding: 9px 13px; font-size: 13.5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
@@ -5907,6 +5908,7 @@ body { font-size: 15.5px; }
   transition: border-color .12s, background .12s; }
 .cl-dropzone:hover, .cl-dropzone.is-over { border-color: var(--accent); background: var(--accent-weak); }
 .cl-dropzone.is-busy { opacity: .6; pointer-events: none; }
+.cl-dropzone-sub { font-size: 11.5px; color: var(--text-mute-3); margin-top: 4px; }
 
 /* A toolbar, not a card — it was inheriting .block's shadow and 18px radius
    and reading as an empty panel floating above the result. */
@@ -5919,15 +5921,44 @@ body { font-size: 15.5px; }
 .cl-err { margin: 8px 0 0; padding: 8px 10px; border-radius: 6px; font-size: 12.5px;
   color: var(--red); background: rgba(200,81,74,.08); border: 1px solid rgba(200,81,74,.25); }
 
-.cl-queue-row { display: flex; gap: 10px; align-items: center; padding: 7px 0;
-  border-bottom: 1px solid var(--line-soft); }
+.cl-queue { display: flex; flex-direction: column; gap: 4px; }
+.cl-queue-row { padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
 .cl-queue-row:last-child { border-bottom: 0; }
-.cl-thumb { width: 54px; height: 36px; object-fit: cover; border-radius: 4px;
-  border: 1px solid var(--line); cursor: pointer; background: var(--bg-inset); }
+/* An untagged chart is the one thing on this page that needs a hand —
+   it cannot be benched until it names a ticker. */
+.cl-queue-row.is-untagged .cl-input-tkr { border-color: var(--amber); }
+
+.cl-queue-top { display: grid; grid-template-columns: 54px minmax(0, 1fr) 62px 86px;
+  gap: 7px; align-items: center; }
+.cl-queue-bot { display: flex; gap: 7px; align-items: center; margin-top: 6px;
+  padding-left: 61px; }
+.cl-input-note { flex: 1 1 auto; min-width: 0; font-size: 12.5px; padding: 6px 9px; }
+.cl-input-tkr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-transform: uppercase; }
+.cl-queue-top .cl-select { font-size: 12px; padding: 8px 18px 8px 8px; }
+
+.cl-thumb { width: 54px; height: 38px; object-fit: cover; border-radius: 5px;
+  border: 1px solid var(--line); cursor: zoom-in; background: var(--bg-inset); }
 .cl-thumb-none { cursor: default; }
-.cl-queue-body { flex: 1; min-width: 0; }
-.cl-queue-title { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cl-queue-sub { font-size: 11px; }
+.cl-zoom { display: block; width: 100%; margin: 8px 0 0; border-radius: 8px;
+  border: 1px solid var(--line); cursor: zoom-out; }
+
+.cl-queue-foot { display: flex; flex-wrap: wrap; gap: 10px; font-size: 10.5px;
+  margin-top: 5px; padding-left: 61px; }
+.cl-saved { color: var(--green); }
+.cl-save-err { color: var(--red); }
+.cl-confirm { display: flex; gap: 5px; }
+.cl-x { border: 0; background: none; color: var(--text-mute-3); cursor: pointer;
+  font-size: 17px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+.cl-x:hover { color: var(--red); background: rgba(200,81,74,.08); }
+.cl-danger { color: var(--red); border-color: var(--red-soft); }
+.cl-danger:hover { color: var(--red); border-color: var(--red); }
+
+.cl-note-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  padding: 7px 10px; border-radius: 7px; font-size: 12px; color: var(--text-mute);
+  background: var(--bg-inset); border: 1px solid var(--line); }
+.cl-note-bar .cl-x { margin-left: auto; }
+
 .cl-badge { font-size: 10.5px; padding: 2px 7px; border-radius: 99px; border: 1px solid var(--line); }
 .cl-badge-ok { color: var(--green); border-color: var(--green-soft); }
 
