@@ -73,10 +73,14 @@ function ChartDrop({ onParked }) {
 
   return (
     <div className="block cl-drop-block">
-      <div className="block-head">
-        <div className="block-title">Drop a chart</div>
-        <div className="block-sub">desk read · never counts as a trusted voice</div>
-      </div>
+      <header className="block-head">
+        <div className="block-title">
+          <span className="block-num mono">U4</span>
+          <span>Drop a chart</span>
+          <span className="block-sub">desk read · never counts as a trusted voice</span>
+        </div>
+      </header>
+      <div className="block-body">
       <div className="cl-meta">
         <input className="cl-input" placeholder="ticker (RIG)" value={ticker}
                onChange={e => setTicker(e.target.value.toUpperCase())} />
@@ -97,6 +101,7 @@ function ChartDrop({ onParked }) {
                onChange={e => send(e.target.files)} />
       </div>
       {err && <div className="cl-err">{err}</div>}
+      </div>
     </div>
   );
 }
@@ -347,16 +352,18 @@ function ClExits({ exits, headroom }) {
 function BenchCard({ card }) {
   return (
     <div className="block cl-card">
-      <div className="block-head">
+      <header className="block-head">
         <div className="block-title">
-          {card.ticker}
-          <span className="muted cl-resolved">{card.resolved_symbol}</span>
+          <span className="block-num mono">U4</span>
+          <span>{card.ticker}</span>
+          <span className="muted cl-resolved mono">{card.resolved_symbol}</span>
+          <span className="block-sub mono">
+            {clFmt(card.close)} · ATR {clFmt(card.atr)} · {card.n_bars} bars
+          </span>
         </div>
-        <div className="block-sub mono">
-          {clFmt(card.close)} · ATR {clFmt(card.atr)} · {card.n_bars} bars
-        </div>
-      </div>
+      </header>
 
+      <div className="block-body">
       {(card.warnings || []).map((w, i) => (
         <div className="cl-warn" key={i}>{w}</div>
       ))}
@@ -368,6 +375,7 @@ function BenchCard({ card }) {
       <ClVoices card={card} />
       <ClGrade card={card} />
       <ClExits exits={card.exits} headroom={card.headroom_r} />
+      </div>
     </div>
   );
 }
@@ -422,21 +430,29 @@ function ChartLab() {
           if (j.ticker) setTicker(j.ticker);
         }} />
         <div className="block">
-          <div className="block-head">
-            <div className="block-title">Desk charts</div>
+          <header className="block-head">
+            <div className="block-title">
+              <span className="block-num mono">U4</span>
+              <span>Desk charts</span>
+              {charts.length
+                ? <span className="block-sub">{charts.length} parked</span>
+                : null}
+            </div>
             <div className="block-actions">
               <button className="btn-mini" onClick={loadCharts}>refresh</button>
             </div>
+          </header>
+          <div className="block-body">
+            <ChartQueue
+              charts={charts} onRead={readChart} reading={reading}
+              onPick={c => { if (c.has_read) loadCharts(); }}
+            />
           </div>
-          <ChartQueue
-            charts={charts} onRead={readChart} reading={reading}
-            onPick={c => { if (c.has_read) loadCharts(); }}
-          />
         </div>
       </div>
 
       <div className="cl-right">
-        <div className="block cl-bench-bar">
+        <div className="cl-bench-bar">
           <input
             className="cl-input cl-input-bench"
             placeholder="bench a ticker — RIG, BTC, URA"
@@ -451,7 +467,7 @@ function ChartLab() {
         {err && <div className="cl-err">{err}</div>}
         {card && <BenchCard card={card} />}
         {!card && !loading && !err &&
-          <div className="muted cl-empty">
+          <div className="cl-placeholder">
             Drop a chart, read it, then bench the ticker. The card composes your
             read with structure, trusted-voice levels and the framework grade.
           </div>}
